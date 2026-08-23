@@ -72,7 +72,7 @@ try {
     copyIfPresent(join(wxkeyRoot, "LICENSE"), join(output, "LICENSE.wxkey"));
   }
 
-  const wcdbRoot = await downloadArchive(WCDB, join(work, "wcdb"));
+  const wcdbRoot = await downloadArchive(WCDB, join(work, "wcdb"), findWcdbRoot);
   buildWcdb(wcdbRoot, join(output, targetConfig.library), targetConfig, work);
   copyIfPresent(join(wechatRoot, "LICENSE"), join(output, "LICENSE.wechat-cli"));
   copyIfPresent(join(wechatRoot, "SECURITY.md"), join(output, "SECURITY.wechat-cli.md"));
@@ -173,6 +173,20 @@ function expandArchive(archive, destination) {
 function defaultArchiveRoot(directory) {
   const entries = readdirSync(directory, { withFileTypes: true }).filter((entry) => entry.isDirectory());
   return entries.length === 1 ? join(directory, entries[0].name) : directory;
+}
+
+function findWcdbRoot(directory) {
+  try {
+    if (statSync(join(directory, "src", "CMakeLists.txt")).isFile()) return directory;
+  } catch {
+    // Continue into archive wrapper directories.
+  }
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const nested = findWcdbRoot(join(directory, entry.name));
+    if (nested) return nested;
+  }
+  return undefined;
 }
 
 function buildGo(source, packagePath, destination, config) {
