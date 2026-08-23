@@ -1,0 +1,44 @@
+import type { ReactNode, SVGProps } from "react";
+
+export type IconName =
+  | "overview"
+  | "detail"
+  | "data"
+  | "refresh"
+  | "upload"
+  | "download"
+  | "trash"
+  | "chevron"
+  | "message"
+  | "calendar"
+  | "users"
+  | "send"
+  | "search"
+  | "check"
+  | "warning";
+
+const paths: Record<IconName, ReactNode> = {
+  overview: <><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
+  detail: <><path d="M4 5h16M4 12h10M4 19h7"/><circle cx="18" cy="17" r="3"/></>,
+  data: <><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></>,
+  refresh: <><path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 1-2-5l3 3"/></>,
+  upload: <><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 15v5h16v-5"/></>,
+  download: <><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 19h16"/></>,
+  trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/></>,
+  chevron: <path d="m9 18 6-6-6-6"/>,
+  message: <path d="M21 14a4 4 0 0 1-4 4H8l-5 3V7a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z"/>,
+  calendar: <><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M16 3v4M8 3v4M3 10h18"/></>,
+  users: <><circle cx="9" cy="8" r="4"/><path d="M2 21a7 7 0 0 1 14 0M16 4a4 4 0 0 1 0 8M17 15a6 6 0 0 1 5 6"/></>,
+  send: <><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></>,
+  search: <><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></>,
+  check: <path d="m5 12 4 4L19 6"/>,
+  warning: <><path d="M12 3 2 21h20z"/><path d="M12 9v5M12 18h.01"/></>,
+};
+
+export function Icon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement>) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" {...props}>
+      {paths[name]}
+    </svg>
+  );
+}

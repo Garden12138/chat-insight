@@ -1,0 +1,74 @@
+name: Release desktop installers
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            target: aarch64-apple-darwin
+            label: macOS_aarch64
+          - runner: macos-15-intel
+            target: x86_64-apple-darwin
+            label: macOS_x64
+          - runner: windows-2025
+            target: x86_64-pc-windows-msvc
+            label: Windows_x64
+    runs-on: ${{ matrix.runner }}
+    env:
+      CHAT_INSIGHT_TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: ${{ matrix.target }}
+      - run: npm ci
+      - name: Verify release version
+        run: node scripts/verify-release-version.mjs
+      - name: Fetch and verify pinned WeChat bridge
+        run: npm run bridge:fetch
+      - name: Build and publish
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: "Chat Insight ${{ github.ref_name }}"
+          releaseBody: "本地微信聊天可视化分析。macOS 安装包使用 ad-hoc 签名且未公证；Windows 安装包暂未进行商业代码签名。"
+          releaseDraft: false
+          prerelease: false
+          releaseAssetNamePattern: "Chat-Insight_[version]_${{ matrix.label }}[setup][ext]"
+          args: "--target ${{ matrix.target }}"
+
+  checksums:
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Download release installers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release download "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" --dir release-assets
+      - name: Generate SHA-256 manifest
+        working-directory: release-assets
+        run: sha256sum * > SHA256SUMS
+      - name: Upload checksum manifest
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" release-assets/SHA256SUMS --repo "${GITHUB_REPOSITORY}" --clobber

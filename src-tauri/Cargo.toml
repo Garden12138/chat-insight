@@ -1,0 +1,29 @@
+[package]
+name = "chat-insight"
+version = "0.1.0"
+description = "Local-first WeChat conversation analytics"
+authors = ["Chat Insight contributors"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "chat_insight_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+directories = "6"
+jieba-rs = "0.8"
+rusqlite = { version = "0.37", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+thiserror = "2"
+uuid = { version = "1", features = ["v4"] }
+
+[dev-dependencies]
+tempfile = "3"

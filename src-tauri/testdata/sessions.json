@@ -1,0 +1,9 @@
+{
+  "ok": true,
+  "data": {
+    "sessions": [
+      { "talker": "fixture-alice", "display_name": "小艾" },
+      { "talker": "team@chatroom", "display_name": "周末小队" }
+    ]
+  }
+}

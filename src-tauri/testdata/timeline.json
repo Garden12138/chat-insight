@@ -1,0 +1,18 @@
+{
+  "ok": true,
+  "tool": "chat_timeline",
+  "data": {
+    "query": { "has_more": false },
+    "messages": [
+      {
+        "id": { "local_id": 42, "server_id_str": "9001", "talker": "team@chatroom" },
+        "time_iso": "2026-08-22T20:31:00+08:00",
+        "sender": "小艾",
+        "sender_wxid": "wxid_fixture_alice",
+        "is_from_me": false,
+        "kind": "text",
+        "text": "虚构测试消息"
+      }
+    ]
+  }
+}

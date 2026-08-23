@@ -1,0 +1,189 @@
+mod analysis;
+mod bridge;
+mod database;
+mod error;
+mod models;
+mod portable;
+
+use database::Database;
+use models::{
+    AccountSummary, BootstrapResult, ChatDetailData, ChatListItem, DashboardData, DateRange,
+    ExportResult, ImportResult, PlatformCapabilities, SyncResult,
+};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use tauri::{AppHandle, Manager, State};
+
+struct AppState {
+    database: Database,
+    sync_running: Arc<AtomicBool>,
+    sync_cancel: Arc<AtomicBool>,
+}
+
+impl AppState {
+    fn new(database: Database) -> Self {
+        Self {
+            database,
+            sync_running: Arc::new(AtomicBool::new(false)),
+            sync_cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+}
+
+fn public_error(error: impl std::fmt::Display) -> String {
+    error.to_string()
+}
+
+#[tauri::command]
+fn get_capabilities(app: AppHandle) -> PlatformCapabilities {
+    bridge::capabilities(&app)
+}
+
+#[tauri::command]
+fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountSummary>, String> {
+    state.database.list_accounts().map_err(public_error)
+}
+
+#[tauri::command]
+async fn bootstrap_bridge(app: AppHandle) -> Result<BootstrapResult, String> {
+    let worker_app = app.clone();
+    tauri::async_runtime::spawn_blocking(move || bridge::bootstrap(&worker_app))
+        .await
+        .map_err(|_| "本机授权任务意外结束".to_string())?
+        .map_err(public_error)?;
+    Ok(BootstrapResult {
+        ready: true,
+        message: "本机微信读取已准备完成".into(),
+    })
+}
+
+#[tauri::command]
+async fn start_sync(app: AppHandle, state: State<'_, AppState>) -> Result<SyncResult, String> {
+    if state
+        .sync_running
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("已有同步任务正在运行".into());
+    }
+    state.sync_cancel.store(false, Ordering::SeqCst);
+    let running = Arc::clone(&state.sync_running);
+    let cancel = Arc::clone(&state.sync_cancel);
+    let database = state.database.clone();
+    let worker_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let result = bridge::sync_wechat(&worker_app, &database, &cancel);
+        running.store(false, Ordering::SeqCst);
+        result
+    })
+    .await
+    .map_err(|_| "同步任务意外结束".to_string())?;
+    result.map_err(public_error)
+}
+
+#[tauri::command]
+fn cancel_sync(state: State<'_, AppState>) {
+    state.sync_cancel.store(true, Ordering::SeqCst);
+}
+
+#[tauri::command]
+fn query_dashboard(
+    state: State<'_, AppState>,
+    account_id: String,
+    range: DateRange,
+) -> Result<DashboardData, String> {
+    state
+        .database
+        .dashboard(&account_id, &range)
+        .map_err(public_error)
+}
+
+#[tauri::command]
+fn list_chats(
+    state: State<'_, AppState>,
+    account_id: String,
+    search: String,
+) -> Result<Vec<ChatListItem>, String> {
+    state
+        .database
+        .list_chats(&account_id, &search)
+        .map_err(public_error)
+}
+
+#[tauri::command]
+fn query_chat_detail(
+    state: State<'_, AppState>,
+    account_id: String,
+    chat_id: String,
+    range: DateRange,
+    offset: i64,
+    limit: i64,
+) -> Result<ChatDetailData, String> {
+    state
+        .database
+        .chat_detail(&account_id, &chat_id, &range, offset, limit)
+        .map_err(public_error)
+}
+
+#[tauri::command]
+async fn import_jsonl(state: State<'_, AppState>, path: PathBuf) -> Result<ImportResult, String> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || portable::import_jsonl(&database, &path))
+        .await
+        .map_err(|_| "导入任务意外结束".to_string())?
+        .map_err(public_error)
+}
+
+#[tauri::command]
+async fn export_jsonl(
+    state: State<'_, AppState>,
+    account_id: String,
+    path: PathBuf,
+) -> Result<ExportResult, String> {
+    let database = state.database.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        portable::export_jsonl(&database, &account_id, &path)
+    })
+    .await
+    .map_err(|_| "导出任务意外结束".to_string())?
+    .map_err(public_error)
+}
+
+#[tauri::command]
+fn clear_account(state: State<'_, AppState>, account_id: String) -> Result<(), String> {
+    state
+        .database
+        .clear_account(&account_id)
+        .map_err(public_error)
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let app_data = app.path().app_data_dir()?;
+            let database = Database::new(app_data.join("chat-insight.db"));
+            database
+                .initialize()
+                .map_err(|error| std::io::Error::other(error.to_string()))?;
+            app.manage(AppState::new(database));
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            get_capabilities,
+            list_accounts,
+            bootstrap_bridge,
+            start_sync,
+            cancel_sync,
+            query_dashboard,
+            list_chats,
+            query_chat_detail,
+            import_jsonl,
+            export_jsonl,
+            clear_account,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running Chat Insight");
+}
