@@ -207,7 +207,7 @@ function buildWcdb(sourceRoot, destination, config, workRoot) {
   const configure = ["-S", source, "-B", build, "-DBUILD_SHARED_LIBS=ON"];
   if (config.goos === "windows") {
     configure.push(
-      "-G", "Visual Studio 17 2022", "-A", "x64",
+      "-A", "x64",
       "-DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded",
       "-DCMAKE_C_FLAGS=/DSQLITE_API=__declspec(dllexport)",
     );
