@@ -16,7 +16,9 @@ SQLite 快照，并提供消息趋势、活跃时段、聊天排行、消息类�
 | Windows x64 | NSIS 安装器 | 微信 4.x，内置固定版本数据桥 | 支持 |
 
 微信数据桥固定为 [`r266-tech/wechat-cli v1.6.20`](https://github.com/r266-tech/wechat-cli)。
-Release 构建使用版本化资产，并核验 GitHub Release 元数据发布的 SHA-256；不会跟随 `latest`。
+由于上游 GitHub Release 当前不可访问，Release 在原生 runner 上从 Go 模块代理缓存的固定
+`v1.6.20` 源码构建数据桥，并从腾讯官方固定 `WCDB v2.1.15` 源码构建数据库运行库；所有
+源码归档均校验仓库内固定的 SHA-256，不会跟随 `latest`。
 
 ## 隐私边界
 
