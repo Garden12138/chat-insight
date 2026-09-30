@@ -15,5 +15,8 @@ The macOS bridge also includes `r266-tech/wxkey v1.4.8` (MIT). The encrypted SQL
 from Tencent WCDB v2.1.15 (BSD 3-Clause). Their license and notice files are copied into application
 resources when present. macOS Intel builds do not include these components.
 
-Chat Insight does not modify the upstream sources and does not enable message sending, UI control,
-or a background watcher.
+Chat Insight applies one patch to wxkey before building it:
+`scripts/patches/wxkey-v1.4.8-wechat-app-path.patch` also looks for WeChat at
+`/Applications/微信.app` when `/Applications/WeChat.app` does not exist. The applied patch list is
+recorded in `bridge-manifest.json`. wechat-cli and WCDB are built without modification. Chat
+Insight does not enable message sending, UI control, or a background watcher.

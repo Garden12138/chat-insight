@@ -104,7 +104,7 @@ pub fn bootstrap(app: &AppHandle) -> AppResult<()> {
         if !paths.wxkey.is_file() {
             return Err(AppError::Bridge("安装包中的 wxkey 组件缺失".into()));
         }
-        run_status(&paths.wxkey, &paths.directory, &["bootstrap"])?;
+        run_wxkey_bootstrap(app, &paths)?;
     }
     #[cfg(target_os = "windows")]
     run_status(
@@ -357,10 +357,225 @@ fn sync_chat(
     Ok(imported)
 }
 
-#[cfg(any(
-    all(target_os = "macos", target_arch = "aarch64"),
-    target_os = "windows"
-))]
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn run_wxkey_bootstrap(app: &AppHandle, paths: &BridgePaths) -> AppResult<()> {
+    use std::process::Stdio;
+    use std::sync::mpsc::{self, RecvTimeoutError};
+    use std::time::Duration;
+
+    emit_progress(
+        app,
+        "preparing",
+        0,
+        1,
+        "正在启动本机授权引导；如出现“wechat-cli setup”密码窗口，请输入这台 Mac 的登录密码…",
+        0,
+        true,
+    );
+    let bridge_exited = |_| AppError::Bridge("本机微信数据桥意外退出".into());
+    let mut child = Command::new(&paths.wxkey)
+        .current_dir(&paths.directory)
+        .arg("bootstrap")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| AppError::Bridge("无法启动本机微信数据桥".into()))?;
+    let (sender, receiver) = mpsc::channel();
+    if let Some(stdout) = child.stdout.take() {
+        forward_lines(stdout, sender.clone());
+    }
+    if let Some(stderr) = child.stderr.take() {
+        forward_lines(stderr, sender.clone());
+    }
+    drop(sender);
+
+    let mut last_error = None;
+    let mut handle_line = |line: String| {
+        if let Some(message) = wxkey_output::stage_message(&line) {
+            emit_progress(app, "preparing", 0, 1, message, 0, true);
+        }
+        if let Some(detail) = wxkey_output::error_detail(&line) {
+            last_error = Some(detail.to_string());
+        }
+    };
+    // Processes started by wxkey may inherit the pipes, so exit is detected with try_wait
+    // instead of waiting for both streams to close.
+    let status = loop {
+        match receiver.recv_timeout(Duration::from_millis(200)) {
+            Ok(line) => handle_line(line),
+            Err(RecvTimeoutError::Timeout) => {
+                if let Some(status) = child.try_wait().map_err(bridge_exited)? {
+                    break status;
+                }
+            }
+            Err(RecvTimeoutError::Disconnected) => break child.wait().map_err(bridge_exited)?,
+        }
+    };
+    while let Ok(line) = receiver.recv_timeout(Duration::from_millis(200)) {
+        handle_line(line);
+    }
+    if !status.success() {
+        return Err(AppError::Bridge(wxkey_output::failure_message(
+            last_error.as_deref(),
+        )));
+    }
+    Ok(())
+}
+
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+fn forward_lines(
+    stream: impl std::io::Read + Send + 'static,
+    sender: std::sync::mpsc::Sender<String>,
+) {
+    use std::io::{BufRead, BufReader};
+
+    std::thread::spawn(move || {
+        for line in BufReader::new(stream).split(b'\n').map_while(Result::ok) {
+            if sender
+                .send(String::from_utf8_lossy(&line).into_owned())
+                .is_err()
+            {
+                break;
+            }
+        }
+    });
+}
+
+#[cfg_attr(
+    not(all(target_os = "macos", target_arch = "aarch64")),
+    allow(dead_code)
+)]
+mod wxkey_output {
+    const ERROR_PREFIX: &str = "[wxkey] ERROR:";
+
+    const STAGES: &[(&str, &str)] = &[
+        (
+            "=== wxkey bootstrap ===",
+            "管理员授权已确认，正在检查微信…",
+        ),
+        (
+            "Preparing wechat-cli WeChat shadow copy",
+            "正在复制并签名一份微信副本，可能需要几分钟…",
+        ),
+        (
+            "Opening wechat-cli WeChat shadow copy",
+            "正在打开微信副本，请在新打开的微信里登录，并点开任意一个聊天…",
+        ),
+        (
+            "[INFO] Opening WeChat...",
+            "正在打开微信，请登录并点开任意一个聊天…",
+        ),
+        (
+            "Extracting keys and writing config",
+            "正在读取微信数据库密钥，请保持微信登录并点开任意一个聊天…",
+        ),
+        (
+            "PBKDF fallback: launching",
+            "正在重新启动微信读取密钥（最长约 5 分钟），请在新打开的微信里登录，并点开任意一个聊天…",
+        ),
+        ("Extracting image_key", "正在读取图片解码密钥…"),
+    ];
+
+    pub fn stage_message(line: &str) -> Option<&'static str> {
+        STAGES
+            .iter()
+            .find(|(marker, _)| line.contains(marker))
+            .map(|(_, message)| *message)
+    }
+
+    pub fn error_detail(line: &str) -> Option<&str> {
+        line.split_once(ERROR_PREFIX)
+            .map(|(_, detail)| detail.trim())
+            .filter(|detail| !detail.is_empty())
+    }
+
+    pub fn failure_message(detail: Option<&str>) -> String {
+        let Some(detail) = detail else {
+            return "微信数据初始化未完成，请确认授权后重试".into();
+        };
+        let hint = if detail.contains("WeChat app not found") {
+            "未找到微信应用，请确认微信安装在“应用程序”文件夹中后重试"
+        } else if detail.contains("sudo password") {
+            "管理员授权未完成，请重试并在“wechat-cli setup”窗口中输入这台 Mac 的登录密码（需要管理员账户）"
+        } else if detail.contains("lldb") {
+            "读取新版微信密钥需要 Xcode 命令行工具，请在“终端”运行 xcode-select --install 安装后重试"
+        } else if detail.contains("no WeChat 4.x account directory") {
+            "未找到微信数据目录，请登录微信并收发一条消息后重试"
+        } else if detail.contains("not ready yet")
+            || detail.contains("did not start")
+            || detail.contains("no keys")
+        {
+            "没有读取到微信密钥，请保持微信登录并点开任意一个聊天后重试"
+        } else {
+            return format!("微信数据初始化未完成：{detail}");
+        };
+        hint.into()
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn maps_bootstrap_output_to_user_facing_stages() {
+            assert_eq!(
+                stage_message("[INFO] Preparing wechat-cli WeChat shadow copy..."),
+                Some("正在复制并签名一份微信副本，可能需要几分钟…")
+            );
+            assert_eq!(
+                stage_message("[INFO] Opening wechat-cli WeChat shadow copy..."),
+                Some("正在打开微信副本，请在新打开的微信里登录，并点开任意一个聊天…")
+            );
+            assert_eq!(
+                stage_message("[INFO] Opening WeChat..."),
+                Some("正在打开微信，请登录并点开任意一个聊天…")
+            );
+            assert_eq!(
+                stage_message("[wxkey] scanned 12 MB / 3 regions, found=0"),
+                None
+            );
+        }
+
+        #[test]
+        fn extracts_the_error_detail_from_wxkey_output() {
+            assert_eq!(
+                error_detail(
+                    "[wxkey] ERROR: WeChat app not found at /Applications/WeChat.app: no such file"
+                ),
+                Some("WeChat app not found at /Applications/WeChat.app: no such file")
+            );
+            assert_eq!(error_detail("[INFO] Opening WeChat..."), None);
+            assert_eq!(error_detail("[wxkey] ERROR:   "), None);
+        }
+
+        #[test]
+        fn explains_known_wxkey_failures() {
+            assert!(failure_message(Some(
+                "WeChat app not found at /Applications/WeChat.app: stat: no such file or directory"
+            ))
+            .starts_with("未找到微信应用"));
+            assert!(failure_message(Some(
+                "prepare stored sudo credential: sudo password prompt cancelled or failed: exit status 1"
+            ))
+            .starts_with("管理员授权未完成"));
+            assert!(
+                failure_message(Some("lldb python path unavailable: exit status 1"))
+                    .contains("xcode-select --install")
+            );
+            assert_eq!(
+                failure_message(Some("write config: permission denied")),
+                "微信数据初始化未完成：write config: permission denied"
+            );
+            assert_eq!(
+                failure_message(None),
+                "微信数据初始化未完成，请确认授权后重试"
+            );
+        }
+    }
+}
+
+#[cfg(target_os = "windows")]
 fn run_status(
     binary: &std::path::Path,
     directory: &std::path::Path,

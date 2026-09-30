@@ -25,6 +25,7 @@ const WXKEY = {
   version: "v1.4.8",
   url: "https://proxy.golang.org/github.com/r266-tech/wxkey/@v/v1.4.8.zip",
   sha256: "9477ab94245af1594c1fccebf0504863732832e8bf2d1f81105b12bde9fb6083",
+  patches: ["wxkey-v1.4.8-wechat-app-path.patch"],
 };
 const WCDB = {
   version: "v2.1.15",
@@ -68,7 +69,8 @@ try {
 
   if (targetConfig.wxkey) {
     const wxkeyRoot = await downloadModule(WXKEY, join(work, "wxkey"));
-    buildGo(wxkeyRoot, "./cmd/wxkey", join(output, "wxkey"), targetConfig);
+    const patchedWxkeyRoot = applyPatches(wxkeyRoot, join(work, "wxkey-patched"), WXKEY.patches);
+    buildGo(patchedWxkeyRoot, "./cmd/wxkey", join(output, "wxkey"), targetConfig);
     copyIfPresent(join(wxkeyRoot, "LICENSE"), join(output, "LICENSE.wxkey"));
   }
 
@@ -187,6 +189,23 @@ function findWcdbRoot(directory) {
     if (nested) return nested;
   }
   return undefined;
+}
+
+function applyPatches(source, destination, patches) {
+  cpSync(source, destination, { recursive: true });
+  makeWritable(destination);
+  for (const patch of patches) {
+    execFileSync("git", ["apply", resolve("scripts", "patches", patch)], { cwd: destination, stdio: "inherit" });
+  }
+  return destination;
+}
+
+function makeWritable(path) {
+  const info = statSync(path);
+  chmodSync(path, info.mode | 0o200);
+  if (info.isDirectory()) {
+    for (const entry of readdirSync(path)) makeWritable(join(path, entry));
+  }
 }
 
 function buildGo(source, packagePath, destination, config) {

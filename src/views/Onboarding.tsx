@@ -6,11 +6,12 @@ interface OnboardingProps {
   capabilities: PlatformCapabilities;
   busy: boolean;
   progress?: SyncProgress;
+  error?: string;
   onBootstrap: () => void;
   onImport: () => void;
 }
 
-export function Onboarding({ capabilities, busy, progress, onBootstrap, onImport }: OnboardingProps) {
+export function Onboarding({ capabilities, busy, progress, error, onBootstrap, onImport }: OnboardingProps) {
   const canConnect = capabilities.directWechatRead && capabilities.bridgeBundled;
 
   return (
@@ -39,6 +40,13 @@ export function Onboarding({ capabilities, busy, progress, onBootstrap, onImport
           <InlineNotice tone={capabilities.setupState === "bridge_missing" ? "error" : "info"}>
             <strong>{capabilities.arch === "x86_64" && capabilities.os === "macos" ? "这台 Intel Mac 使用导入分析模式" : "当前安装不包含微信数据桥"}</strong>
             <p>{capabilities.setupHint}</p>
+          </InlineNotice>
+        )}
+
+        {error && !busy && (
+          <InlineNotice tone="error">
+            <strong>本机授权未完成</strong>
+            <p>{error}</p>
           </InlineNotice>
         )}
 

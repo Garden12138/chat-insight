@@ -25,6 +25,7 @@ export default function App() {
   const [preset, setPreset] = useState<RangePreset>("all");
   const [customRange, setCustomRange] = useState<DateRange>({});
   const [syncProgress, setSyncProgress] = useState<SyncProgress>();
+  const [setupError, setSetupError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const [requestedChatId, setRequestedChatId] = useState<string>();
@@ -64,6 +65,7 @@ export default function App() {
       setRevision((value) => value + 1);
       notify("success", result.cancelled ? "同步已取消，已完成的数据已保存" : `同步完成：新增 ${result.messagesImported} 条消息`);
     } catch (reason) {
+      setSyncProgress(undefined);
       notify("error", errorMessage(reason));
     } finally {
       setBusy(false);
@@ -72,15 +74,18 @@ export default function App() {
 
   async function bootstrapAndSync() {
     setBusy(true);
+    setSetupError(undefined);
     try {
       await api.bootstrap();
       setCapabilities(await api.capabilities());
-      setBusy(false);
-      await runSync();
     } catch (reason) {
       setBusy(false);
-      notify("error", errorMessage(reason));
+      setSyncProgress(undefined);
+      setSetupError(errorMessage(reason));
+      return;
     }
+    setBusy(false);
+    await runSync();
   }
 
   async function importData() {
@@ -135,7 +140,9 @@ export default function App() {
   }
 
   if (!capabilities) return <div className="app-loading"><div className="brand-mark large"><span /><span /><span /></div><LoadingState label="正在打开本地数据库…" /></div>;
-  if (!activeAccount) return <Onboarding capabilities={capabilities} busy={busy} progress={syncProgress} onBootstrap={bootstrapAndSync} onImport={importData} />;
+  const toastView = toast && <div className={`toast ${toast.tone}`} role="status"><Icon name={toast.tone === "success" ? "check" : "warning"} />{toast.text}</div>;
+
+  if (!activeAccount) return <><Onboarding capabilities={capabilities} busy={busy} progress={syncProgress} error={setupError} onBootstrap={bootstrapAndSync} onImport={importData} />{toastView}</>;
 
   return (
     <div className="app-shell">
@@ -165,7 +172,7 @@ export default function App() {
         {view === "data" && <DataManagement account={activeAccount} capabilities={capabilities} busy={busy} onSync={runSync} onImport={importData} onExport={exportData} onClear={clearData} />}
       </main>
 
-      {toast && <div className={`toast ${toast.tone}`} role="status"><Icon name={toast.tone === "success" ? "check" : "warning"} />{toast.text}</div>}
+      {toastView}
     </div>
   );
 }

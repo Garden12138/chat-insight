@@ -18,7 +18,9 @@ SQLite 快照，并提供消息趋势、活跃时段、聊天排行、消息类�
 微信数据桥固定为 [`r266-tech/wechat-cli v1.6.20`](https://github.com/r266-tech/wechat-cli)。
 由于上游 GitHub Release 当前不可访问，Release 在原生 runner 上从 Go 模块代理缓存的固定
 `v1.6.20` 源码构建数据桥，并从腾讯官方固定 `WCDB v2.1.15` 源码构建数据库运行库；所有
-源码归档均校验仓库内固定的 SHA-256，不会跟随 `latest`。
+源码归档均校验仓库内固定的 SHA-256，不会跟随 `latest`。上游 `wxkey v1.4.8` 只认
+`/Applications/WeChat.app`，构建时会应用 `scripts/patches/` 中的补丁，让它同时识别
+`/Applications/微信.app`。
 
 ## 隐私边界
 

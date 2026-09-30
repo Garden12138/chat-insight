@@ -1,0 +1,23 @@
+diff --git a/cmd/wxkey/main.go b/cmd/wxkey/main.go
+index 752f079..62ce2e9 100644
+--- a/cmd/wxkey/main.go
++++ b/cmd/wxkey/main.go
+@@ -2438,7 +2438,17 @@ func buildNoAccountDirError(roots []string) error {
+ 	return fmt.Errorf("%s", b.String())
+ }
+ 
+-const wechatAppPath = "/Applications/WeChat.app"
++// WeChat 4.x may be installed under its localized bundle name instead of WeChat.app.
++var wechatAppPath = firstExistingApp("/Applications/WeChat.app", "/Applications/微信.app")
++
++func firstExistingApp(candidates ...string) string {
++	for _, candidate := range candidates {
++		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
++			return candidate
++		}
++	}
++	return candidates[0]
++}
+ 
+ type wechatSignatureStatus struct {
+ 	Raw     string
