@@ -421,6 +421,40 @@ impl Database {
         connection.execute("DELETE FROM accounts WHERE id=?1", params![account_id])?;
         Ok(())
     }
+
+    pub fn adopt_legacy_account(
+        &self,
+        legacy_id: &str,
+        account_id: &str,
+        display_name: &str,
+    ) -> AppResult<bool> {
+        let mut connection = self.connection()?;
+        let transaction = connection.transaction()?;
+        let exists = |id: &str| -> rusqlite::Result<bool> {
+            transaction.query_row(
+                "SELECT EXISTS(SELECT 1 FROM accounts WHERE id=?1)",
+                params![id],
+                |row| row.get(0),
+            )
+        };
+        if !exists(legacy_id)? || exists(account_id)? {
+            return Ok(false);
+        }
+        // Child keys are rewritten after the parent, so the checks must wait for commit.
+        transaction.pragma_update(None, "defer_foreign_keys", "ON")?;
+        transaction.execute(
+            "UPDATE accounts SET id=?2, display_name=?3 WHERE id=?1",
+            params![legacy_id, account_id, display_name],
+        )?;
+        for table in ["chats", "messages", "sync_cursors", "sync_runs"] {
+            transaction.execute(
+                &format!("UPDATE {table} SET account_id=?2 WHERE account_id=?1"),
+                params![legacy_id, account_id],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(true)
+    }
 }
 
 fn query_trend(
@@ -512,5 +546,43 @@ mod tests {
             .unwrap();
         assert_eq!(detail.total_messages, 1);
         assert_eq!(detail.messages[0].local_id, 2);
+    }
+
+    #[test]
+    fn adopts_legacy_dataset_once_without_touching_other_accounts() {
+        let db = fixture_db();
+        db.upsert_account("legacy", "wechat-cli", "macos").unwrap();
+        db.upsert_chat("legacy", "alice", "小艾", "direct").unwrap();
+        db.insert_message("legacy", &message(7, "2026-08-20", 9, true))
+            .unwrap();
+        db.save_cursor("legacy", "alice", 7).unwrap();
+        let run = db.start_sync_run("legacy").unwrap();
+        db.finish_sync_run(run, "complete", 1, 1, 0).unwrap();
+
+        assert!(db
+            .adopt_legacy_account("legacy", "wechat:wxid_a", "wxid_a")
+            .unwrap());
+        assert!(!db
+            .adopt_legacy_account("legacy", "wechat:wxid_a", "wxid_a")
+            .unwrap());
+
+        let accounts = db.list_accounts().unwrap();
+        let adopted = accounts.iter().find(|a| a.id == "wechat:wxid_a").unwrap();
+        assert_eq!(adopted.display_name, "wxid_a");
+        assert_eq!(adopted.message_count, 1);
+        assert!(adopted.last_sync_at.is_some());
+        assert!(accounts.iter().all(|a| a.id != "legacy"));
+        assert_eq!(db.max_local_id("wechat:wxid_a", "alice").unwrap(), Some(7));
+        assert_eq!(db.max_local_id("account", "alice").unwrap(), None);
+    }
+
+    #[test]
+    fn keeps_legacy_dataset_when_target_account_already_exists() {
+        let db = fixture_db();
+        db.upsert_account("legacy", "wechat-cli", "macos").unwrap();
+        assert!(!db
+            .adopt_legacy_account("legacy", "account", "测试账号")
+            .unwrap());
+        assert_eq!(db.list_accounts().unwrap().len(), 2);
     }
 }

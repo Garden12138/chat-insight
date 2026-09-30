@@ -5,6 +5,7 @@ export type IconName =
   | "detail"
   | "data"
   | "refresh"
+  | "switch"
   | "upload"
   | "download"
   | "trash"
@@ -22,6 +23,7 @@ const paths: Record<IconName, ReactNode> = {
   detail: <><path d="M4 5h16M4 12h10M4 19h7"/><circle cx="18" cy="17" r="3"/></>,
   data: <><ellipse cx="12" cy="5" rx="8" ry="3"/><path d="M4 5v7c0 1.7 3.6 3 8 3s8-1.3 8-3V5M4 12v7c0 1.7 3.6 3 8 3s8-1.3 8-3v-7"/></>,
   refresh: <><path d="M20 7v5h-5"/><path d="M19 12a7 7 0 1 1-2-5l3 3"/></>,
+  switch: <><path d="M7 4 3 8l4 4M3 8h14"/><path d="m17 12 4 4-4 4M21 16H7"/></>,
   upload: <><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 15v5h16v-5"/></>,
   download: <><path d="M12 4v12M7 11l5 5 5-5"/><path d="M4 19h16"/></>,
   trash: <><path d="M4 7h16M9 7V4h6v3M7 7l1 14h8l1-14M10 11v6M14 11v6"/></>,

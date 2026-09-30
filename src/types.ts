@@ -109,6 +109,13 @@ export interface SyncProgress {
   running: boolean;
 }
 
+export interface BootstrapResult {
+  ready: boolean;
+  message: string;
+  switched: boolean;
+  accountId?: string;
+}
+
 export interface SyncResult {
   accountId: string;
   chatsProcessed: number;

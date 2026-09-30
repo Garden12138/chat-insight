@@ -1,11 +1,14 @@
 use crate::database::Database;
 use crate::error::{AppError, AppResult};
-use crate::models::{NormalizedMessage, PlatformCapabilities, SyncProgress, SyncResult};
+use crate::models::{
+    BootstrapResult, NormalizedMessage, PlatformCapabilities, SyncProgress, SyncResult,
+};
 use crate::portable::normalize_message_kind;
+use crate::wechat_account::{self, AccountIdentity, AccountStore};
 use chrono::{DateTime, Datelike, Timelike};
 use serde_json::Value;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
@@ -87,7 +90,13 @@ pub fn capabilities(app: &AppHandle) -> PlatformCapabilities {
     }
 }
 
-pub fn bootstrap(app: &AppHandle) -> AppResult<()> {
+/// Points the bridge at the WeChat account currently in use. With `require_switch`,
+/// an unchanged account is reported back instead of re-running setup.
+pub fn connect(
+    app: &AppHandle,
+    store: &AccountStore,
+    require_switch: bool,
+) -> AppResult<BootstrapResult> {
     let current = capabilities(app);
     if !current.direct_wechat_read {
         return Err(AppError::Bridge("当前平台只支持导入分析".into()));
@@ -98,21 +107,110 @@ pub fn bootstrap(app: &AppHandle) -> AppResult<()> {
             "安装包中的微信数据桥缺失，请重新安装完整版本".into(),
         ));
     }
+    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+    if !paths.wxkey.is_file() {
+        return Err(AppError::Bridge("安装包中的 wxkey 组件缺失".into()));
+    }
+
+    let config_path = wechat_account::bridge_config_path()?;
+    let previous_config = wechat_account::read_optional(&config_path)?;
+    let previous = previous_config
+        .as_deref()
+        .and_then(wechat_account::identity_from_config_bytes);
+    let active = wechat_account::detect_active_account();
+
+    if let (Some(config), Some(from), Some(to)) = (&previous_config, &previous, &active) {
+        if !from.same_account(to) {
+            switch_account(app, &paths, store, &config_path, config, from, to)?;
+            return Ok(BootstrapResult {
+                ready: true,
+                message: "已切换到当前登录的微信账号".into(),
+                switched: true,
+                account_id: Some(to.account_id()),
+            });
+        }
+    }
+    if require_switch {
+        if active.is_none() {
+            return Err(AppError::Bridge(
+                "没有找到正在使用的微信账号，请确认微信已登录并点开任意一个聊天后重试".into(),
+            ));
+        }
+        if let Some(from) = &previous {
+            return Ok(BootstrapResult {
+                ready: true,
+                message: "微信当前登录的账号没有变化".into(),
+                switched: false,
+                account_id: Some(from.account_id()),
+            });
+        }
+    }
+
+    let target = active.as_ref().or(previous.as_ref());
+    run_platform_bootstrap(app, &paths, target.and_then(|item| item.db_root.as_deref()))?;
+    emit_progress(app, "complete", 1, 1, "本机微信读取已准备完成", 0, false);
+    Ok(BootstrapResult {
+        ready: true,
+        message: "本机微信读取已准备完成".into(),
+        switched: previous.is_none(),
+        account_id: target.map(AccountIdentity::account_id),
+    })
+}
+
+fn switch_account(
+    app: &AppHandle,
+    paths: &BridgePaths,
+    store: &AccountStore,
+    config_path: &Path,
+    previous_config: &[u8],
+    from: &AccountIdentity,
+    to: &AccountIdentity,
+) -> AppResult<()> {
+    store.save(from, previous_config)?;
+    if let Some(saved) = store.load(to)? {
+        emit_progress(
+            app,
+            "preparing",
+            0,
+            1,
+            "正在切换到之前连接过的微信账号…",
+            0,
+            true,
+        );
+        wechat_account::write_private_file(config_path, &saved)?;
+        emit_progress(app, "complete", 1, 1, "已切换微信账号", 0, false);
+        return Ok(());
+    }
+    // wxkey skips key extraction while any ready config exists.
+    wechat_account::remove_if_exists(config_path)?;
+    if let Err(error) = run_platform_bootstrap(app, paths, to.db_root.as_deref()) {
+        let _ = wechat_account::write_private_file(config_path, previous_config);
+        return Err(error);
+    }
+    emit_progress(app, "complete", 1, 1, "已切换微信账号", 0, false);
+    Ok(())
+}
+
+fn run_platform_bootstrap(
+    app: &AppHandle,
+    paths: &BridgePaths,
+    db_root: Option<&Path>,
+) -> AppResult<()> {
     emit_progress(app, "preparing", 0, 1, "正在启动本机授权引导…", 0, true);
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    {
-        if !paths.wxkey.is_file() {
-            return Err(AppError::Bridge("安装包中的 wxkey 组件缺失".into()));
-        }
-        run_wxkey_bootstrap(app, &paths)?;
-    }
+    run_wxkey_bootstrap(app, paths, db_root)?;
     #[cfg(target_os = "windows")]
     run_status(
         &paths.cli,
         &paths.directory,
         &["cache", "refresh", "--force"],
+        db_root,
     )?;
-    emit_progress(app, "complete", 1, 1, "本机微信读取已准备完成", 0, false);
+    #[cfg(not(any(
+        all(target_os = "macos", target_arch = "aarch64"),
+        target_os = "windows"
+    )))]
+    let _ = (paths, db_root);
     Ok(())
 }
 
@@ -128,16 +226,13 @@ pub fn sync_wechat(
         ));
     }
     emit_progress(app, "preparing", 0, 0, "正在检查本机微信数据…", 0, true);
-    let status = run_json(&paths, &["status"])?;
-    let account_source =
-        find_string_by_keys(&status, &["wxid", "account_id", "accountId", "username"])
-            .unwrap_or_else(|| "wechat-local".into());
-    let account_name = find_string_by_keys(
-        &status,
-        &["display_name", "displayName", "nickname", "name"],
-    )
-    .unwrap_or_else(|| "本机微信".into());
-    let account_id = format!("wechat:{account_source}");
+    let status = run_json(&paths, &["status", "--include-debug"])?;
+    let identity = wechat_account::identity_from_status(&status).ok_or_else(|| {
+        AppError::Bridge("无法识别当前连接的微信账号，请重新连接本机微信后再同步".into())
+    })?;
+    let account_id = identity.account_id();
+    let account_name = self_display_name(&paths, identity.self_wxid())
+        .unwrap_or_else(|| identity.self_wxid().to_string());
     database.upsert_account(&account_id, &account_name, std::env::consts::OS)?;
     let run_id = database.start_sync_run(&account_id)?;
 
@@ -358,7 +453,11 @@ fn sync_chat(
 }
 
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-fn run_wxkey_bootstrap(app: &AppHandle, paths: &BridgePaths) -> AppResult<()> {
+fn run_wxkey_bootstrap(
+    app: &AppHandle,
+    paths: &BridgePaths,
+    db_root: Option<&Path>,
+) -> AppResult<()> {
     use std::process::Stdio;
     use std::sync::mpsc::{self, RecvTimeoutError};
     use std::time::Duration;
@@ -373,9 +472,12 @@ fn run_wxkey_bootstrap(app: &AppHandle, paths: &BridgePaths) -> AppResult<()> {
         true,
     );
     let bridge_exited = |_| AppError::Bridge("本机微信数据桥意外退出".into());
-    let mut child = Command::new(&paths.wxkey)
-        .current_dir(&paths.directory)
-        .arg("bootstrap")
+    let mut command = Command::new(&paths.wxkey);
+    command.current_dir(&paths.directory).arg("bootstrap");
+    if let Some(root) = db_root {
+        command.arg("--root").arg(root);
+    }
+    let mut child = command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -575,15 +677,20 @@ mod wxkey_output {
     }
 }
 
-#[cfg(target_os = "windows")]
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn run_status(
-    binary: &std::path::Path,
-    directory: &std::path::Path,
+    binary: &Path,
+    directory: &Path,
     args: &[&str],
+    db_root: Option<&Path>,
 ) -> AppResult<()> {
-    let status = Command::new(binary)
-        .current_dir(directory)
-        .args(args)
+    let mut command = Command::new(binary);
+    command.current_dir(directory).args(args);
+    // wechat-cli refuses to pick between several account directories on its own.
+    if let Some(root) = db_root {
+        command.env("WECHAT_CLI_DB_ROOT", root);
+    }
+    let status = command
         .status()
         .map_err(|_| AppError::Bridge("无法启动本机微信数据桥".into()))?;
     if !status.success() {
@@ -613,6 +720,37 @@ fn run_json(paths: &BridgePaths, args: &[&str]) -> AppResult<Value> {
         ));
     }
     Ok(value)
+}
+
+fn self_display_name(paths: &BridgePaths, self_wxid: &str) -> Option<String> {
+    let value = run_json(
+        paths,
+        &["contacts", "--keyword", self_wxid, "--limit", "20"],
+    )
+    .ok()?;
+    find_contact_nickname(&value, self_wxid)
+}
+
+fn find_contact_nickname(value: &Value, username: &str) -> Option<String> {
+    match value {
+        Value::Array(items) => items
+            .iter()
+            .find_map(|item| find_contact_nickname(item, username)),
+        Value::Object(object) => {
+            if object.get("username").and_then(Value::as_str) == Some(username) {
+                return ["nick_name", "display_name"]
+                    .iter()
+                    .filter_map(|key| object.get(*key).and_then(Value::as_str))
+                    .map(str::trim)
+                    .find(|name| !name.is_empty() && *name != username)
+                    .map(str::to_string);
+            }
+            object
+                .values()
+                .find_map(|child| find_contact_nickname(child, username))
+        }
+        _ => None,
+    }
 }
 
 fn parse_sessions(value: &Value) -> Vec<Session> {
@@ -819,6 +957,23 @@ mod tests {
         assert_eq!(messages[0].chat_id, "team@chatroom");
         assert_eq!(messages[0].local_weekday, 5);
         assert_eq!(messages[0].local_hour, 20);
+    }
+
+    #[test]
+    fn finds_own_nickname_among_fuzzy_contact_matches() {
+        let value = serde_json::json!({
+            "ok": true,
+            "data": [
+                { "username": "wxid_abc123x", "nick_name": "别人" },
+                { "username": "wxid_abc123", "nick_name": " 小曾 ", "display_name": "小曾" }
+            ]
+        });
+        assert_eq!(
+            find_contact_nickname(&value, "wxid_abc123").as_deref(),
+            Some("小曾")
+        );
+        let unnamed = serde_json::json!({ "data": [{ "username": "wxid_a", "nick_name": "" , "display_name": "wxid_a" }] });
+        assert_eq!(find_contact_nickname(&unnamed, "wxid_a"), None);
     }
 
     #[test]

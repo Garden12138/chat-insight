@@ -158,6 +158,8 @@ pub struct SyncResult {
 pub struct BootstrapResult {
     pub ready: bool,
     pub message: String,
+    pub switched: bool,
+    pub account_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]

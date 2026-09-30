@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
-import type { AccountSummary, DateRange, PlatformCapabilities, RangePreset, SyncProgress, ViewName } from "./types";
+import type { AccountSummary, BootstrapResult, DateRange, PlatformCapabilities, RangePreset, SyncProgress, ViewName } from "./types";
 import { DateRangePicker } from "./components/DateRangePicker";
 import { Icon } from "./components/Icons";
 import { LoadingState } from "./components/States";
@@ -88,6 +88,27 @@ export default function App() {
     await runSync();
   }
 
+  async function switchAccount() {
+    setBusy(true);
+    let result: BootstrapResult;
+    try {
+      result = await api.switchAccount();
+    } catch (reason) {
+      setBusy(false);
+      setSyncProgress(undefined);
+      notify("error", errorMessage(reason));
+      return;
+    }
+    setBusy(false);
+    if (!result.switched) {
+      setSyncProgress(undefined);
+      const current = accounts.find((account) => account.id === result.accountId)?.displayName;
+      notify("error", `微信当前登录的仍是${current ? `“${current}”` : "已连接的账号"}。请先在微信里登录要切换的账号并点开任意一个聊天，再点击切换。`);
+      return;
+    }
+    await runSync();
+  }
+
   async function importData() {
     try {
       const selected = await open({ multiple: false, filters: [{ name: "Chat Insight JSONL", extensions: ["jsonl"] }] });
@@ -166,10 +187,10 @@ export default function App() {
           </div>
         </header>
 
-        {syncProgress?.running && <div className="sync-strip"><div><span style={{ width: `${syncProgress.total ? (syncProgress.current / syncProgress.total) * 100 : 10}%` }} /></div><p>{syncProgress.message}</p><button onClick={() => api.cancelSync()}>取消</button></div>}
+        {syncProgress?.running && <div className="sync-strip"><div><span style={{ width: `${syncProgress.total ? (syncProgress.current / syncProgress.total) * 100 : 10}%` }} /></div><p>{syncProgress.message}</p>{syncProgress.phase !== "preparing" && <button onClick={() => api.cancelSync()}>取消</button>}</div>}
         {view === "overview" && <Overview accountId={activeAccount.id} range={range} revision={revision} onOpenDetail={openDetail} />}
         {view === "detail" && <ChatDetail accountId={activeAccount.id} range={range} revision={revision} requestedChatId={requestedChatId} />}
-        {view === "data" && <DataManagement account={activeAccount} capabilities={capabilities} busy={busy} onSync={runSync} onImport={importData} onExport={exportData} onClear={clearData} />}
+        {view === "data" && <DataManagement account={activeAccount} capabilities={capabilities} busy={busy} onSync={runSync} onSwitchAccount={switchAccount} onImport={importData} onExport={exportData} onClear={clearData} />}
       </main>
 
       {toastView}

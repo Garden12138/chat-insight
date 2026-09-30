@@ -4,6 +4,7 @@ mod database;
 mod error;
 mod models;
 mod portable;
+mod wechat_account;
 
 use database::Database;
 use models::{
@@ -14,17 +15,20 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Manager, State};
+use wechat_account::AccountStore;
 
 struct AppState {
     database: Database,
+    account_store: AccountStore,
     sync_running: Arc<AtomicBool>,
     sync_cancel: Arc<AtomicBool>,
 }
 
 impl AppState {
-    fn new(database: Database) -> Self {
+    fn new(database: Database, account_store: AccountStore) -> Self {
         Self {
             database,
+            account_store,
             sync_running: Arc::new(AtomicBool::new(false)),
             sync_cancel: Arc::new(AtomicBool::new(false)),
         }
@@ -46,16 +50,43 @@ fn list_accounts(state: State<'_, AppState>) -> Result<Vec<AccountSummary>, Stri
 }
 
 #[tauri::command]
-async fn bootstrap_bridge(app: AppHandle) -> Result<BootstrapResult, String> {
-    let worker_app = app.clone();
-    tauri::async_runtime::spawn_blocking(move || bridge::bootstrap(&worker_app))
-        .await
-        .map_err(|_| "本机授权任务意外结束".to_string())?
-        .map_err(public_error)?;
-    Ok(BootstrapResult {
-        ready: true,
-        message: "本机微信读取已准备完成".into(),
+async fn bootstrap_bridge(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<BootstrapResult, String> {
+    connect_bridge(app, &state, false).await
+}
+
+#[tauri::command]
+async fn switch_wechat_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<BootstrapResult, String> {
+    connect_bridge(app, &state, true).await
+}
+
+async fn connect_bridge(
+    app: AppHandle,
+    state: &AppState,
+    require_switch: bool,
+) -> Result<BootstrapResult, String> {
+    if state
+        .sync_running
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("已有同步任务正在运行，请等待完成后再连接微信".into());
+    }
+    let running = Arc::clone(&state.sync_running);
+    let store = state.account_store.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let result = bridge::connect(&app, &store, require_switch);
+        running.store(false, Ordering::SeqCst);
+        result
     })
+    .await
+    .map_err(|_| "本机授权任务意外结束".to_string())?;
+    result.map_err(public_error)
 }
 
 #[tauri::command]
@@ -168,13 +199,17 @@ pub fn run() {
             database
                 .initialize()
                 .map_err(|error| std::io::Error::other(error.to_string()))?;
-            app.manage(AppState::new(database));
+            // Best effort: an unreadable bridge config leaves the old dataset as is.
+            let _ = wechat_account::adopt_legacy_dataset(&database);
+            let account_store = AccountStore::new(app_data.join("wechat-accounts"));
+            app.manage(AppState::new(database, account_store));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
             get_capabilities,
             list_accounts,
             bootstrap_bridge,
+            switch_wechat_account,
             start_sync,
             cancel_sync,
             query_dashboard,

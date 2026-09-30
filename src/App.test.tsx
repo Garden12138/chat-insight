@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import type { PlatformCapabilities, SyncProgress } from "./types";
+import type { AccountSummary, PlatformCapabilities, SyncProgress } from "./types";
 
 const mocks = vi.hoisted(() => ({
   progressHandler: undefined as ((progress: SyncProgress) => void) | undefined,
@@ -9,7 +9,9 @@ const mocks = vi.hoisted(() => ({
     capabilities: vi.fn(),
     accounts: vi.fn(),
     bootstrap: vi.fn(),
+    switchAccount: vi.fn(),
     sync: vi.fn(),
+    dashboard: vi.fn(),
     onSyncProgress: vi.fn(),
   },
 }));
@@ -58,5 +60,53 @@ describe("onboarding local authorization", () => {
     expect(await screen.findByText(/未找到微信应用/)).toBeVisible();
     expect(screen.queryByText(preparing.message)).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /连接本机微信/ })).toBeEnabled();
+  });
+});
+
+describe("switching WeChat accounts", () => {
+  const oldAccount: AccountSummary = {
+    id: "wechat:wxid_old_1a2b",
+    displayName: "旧号",
+    sourcePlatform: "macos",
+    messageCount: 10,
+    chatCount: 2,
+    lastSyncAt: "2026-09-01T00:00:00Z",
+  };
+  const newAccount: AccountSummary = { ...oldAccount, id: "wechat:wxid_new_3c4d", displayName: "新号" };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.api.capabilities.mockResolvedValue(macCapabilities);
+    mocks.api.accounts.mockResolvedValue([oldAccount]);
+    mocks.api.dashboard.mockReturnValue(new Promise(() => {}));
+    mocks.api.onSyncProgress.mockResolvedValue(() => undefined);
+  });
+
+  async function openDataManagement() {
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "数据管理" }));
+  }
+
+  it("explains that the connected account is still logged in", async () => {
+    mocks.api.switchAccount.mockResolvedValue({ ready: true, message: "", switched: false, accountId: oldAccount.id });
+
+    await openDataManagement();
+    fireEvent.click(screen.getByRole("button", { name: "切换账号" }));
+
+    expect(await screen.findByText(/微信当前登录的仍是“旧号”/)).toBeVisible();
+    expect(mocks.api.sync).not.toHaveBeenCalled();
+  });
+
+  it("syncs the newly connected account into its own dataset", async () => {
+    mocks.api.switchAccount.mockResolvedValue({ ready: true, message: "", switched: true, accountId: newAccount.id });
+    mocks.api.sync.mockResolvedValue({ accountId: newAccount.id, chatsProcessed: 1, messagesImported: 3, warnings: 0, cancelled: false });
+
+    await openDataManagement();
+    mocks.api.accounts.mockResolvedValue([newAccount, oldAccount]);
+    fireEvent.click(screen.getByRole("button", { name: "切换账号" }));
+
+    expect(await screen.findByText("同步完成：新增 3 条消息")).toBeVisible();
+    expect(screen.getByRole("combobox")).toHaveValue(newAccount.id);
+    expect(screen.getByRole("heading", { name: "新号" })).toBeVisible();
   });
 });

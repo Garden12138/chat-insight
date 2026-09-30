@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AccountSummary,
+  BootstrapResult,
   ChatDetailData,
   ChatListItem,
   DashboardData,
@@ -32,7 +33,8 @@ async function call<T>(command: string, args: Record<string, unknown> = {}): Pro
 export const api = {
   capabilities: async () => (inTauri() ? call<PlatformCapabilities>("get_capabilities") : browserCapabilities),
   accounts: async () => (inTauri() ? call<AccountSummary[]>("list_accounts") : []),
-  bootstrap: () => call<{ ready: boolean; message: string }>("bootstrap_bridge"),
+  bootstrap: () => call<BootstrapResult>("bootstrap_bridge"),
+  switchAccount: () => call<BootstrapResult>("switch_wechat_account"),
   sync: () => call<SyncResult>("start_sync"),
   cancelSync: () => call<void>("cancel_sync"),
   dashboard: (accountId: string, range: DateRange) =>
