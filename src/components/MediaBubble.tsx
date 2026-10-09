@@ -62,7 +62,7 @@ export function MediaBubble({ accountId, chatId, message, onOpen }: MediaBubbleP
       <button type="button" onClick={onOpen} aria-label={isVideo ? "播放视频" : "查看图片"}>
         {thumb
           ? <img src={mediaUrl("poster", accountId, chatId, message.localId)} alt="" loading="lazy" onError={() => setBroken(true)} />
-          : <span className="media-blank" />}
+          : <video src={`${mediaUrl("video", accountId, chatId, message.localId)}#t=0.1`} preload="metadata" muted playsInline aria-hidden="true" onError={() => setBroken(true)} />}
         {isVideo && <span className="media-play"><Icon name="play" /></span>}
       </button>
     </div>

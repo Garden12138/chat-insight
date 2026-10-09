@@ -185,9 +185,9 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 3px s
 .media-bubble { width: fit-content; }
 .media-bubble button { position: relative; display: block; padding: 0; border: 0; border-radius: 16px; overflow: hidden; background: var(--surface-sunken); box-shadow: var(--shadow); cursor: zoom-in; }
 .media-bubble.video button { cursor: pointer; }
+.media-bubble video { display: block; width: 260px; height: 146px; object-fit: cover; background: linear-gradient(135deg, #3b302a, #7a5a48); pointer-events: none; }
 .media-bubble img { display: block; max-width: 280px; max-height: 280px; min-width: 96px; min-height: 72px; object-fit: cover; transition: transform .3s ease; }
 .media-bubble button:hover img { transform: scale(1.03); }
-.media-blank { display: block; width: 260px; height: 146px; background: linear-gradient(135deg, #3b302a, #7a5a48); }
 .media-play { position: absolute; inset: 0; margin: auto; width: 48px; height: 48px; display: grid; place-items: center; border-radius: 50%; color: var(--coral); background: rgba(255, 255, 255, .92); box-shadow: 0 8px 20px rgba(0, 0, 0, .2); }
 .media-play svg { width: 20px; margin-left: 3px; }
 .media-bubble.loading { width: 200px; height: 140px; border-radius: 16px; background: linear-gradient(100deg, var(--surface-sunken) 30%, var(--coral-soft) 50%, var(--surface-sunken) 70%); background-size: 300% 100%; animation: shimmer 1.4s ease-in-out infinite; }

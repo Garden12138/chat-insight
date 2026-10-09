@@ -40,6 +40,13 @@ describe("MediaBubble", () => {
     expect(await screen.findByRole("button", { name: "播放视频" })).toBeVisible();
   });
 
+  it("uses the first video frame when there is no poster", async () => {
+    mocks.api.mediaInfo.mockResolvedValue({ image: false, video: true, poster: false });
+    const { container } = render(<MediaBubble accountId="a" chatId="c" message={message(4, "video")} onOpen={() => {}} />);
+    await screen.findByRole("button", { name: "播放视频" });
+    expect(container.querySelector("video")?.getAttribute("src")).toBe("chatmedia://localhost/video/a/c/4#t=0.1");
+  });
+
   it("explains why media cannot be shown", async () => {
     mocks.api.mediaInfo.mockResolvedValue({ image: false, video: false, poster: false, reason: "只有当前连接的微信账号可以查看图片和视频" });
     render(<MediaBubble accountId="a" chatId="c" message={message(3, "image")} onOpen={() => {}} />);
