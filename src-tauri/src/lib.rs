@@ -1,7 +1,9 @@
+mod ai;
 mod analysis;
 mod bridge;
 mod database;
 mod error;
+mod insights;
 mod media;
 mod models;
 mod portable;
@@ -230,6 +232,9 @@ pub fn run() {
             let account_store = AccountStore::new(app_data.join("wechat-accounts"));
             app.manage(AppState::new(database, account_store));
             app.manage(MediaResolver::new(app_data.join("sticker-cache")));
+            app.manage(ai::AiState::new(ai::settings::SettingsStore::new(
+                app_data.join("ai"),
+            )));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -246,6 +251,21 @@ pub fn run() {
             import_jsonl,
             export_jsonl,
             clear_account,
+            ai::commands::ai_get_settings,
+            ai::commands::ai_save_settings,
+            ai::commands::ai_test_connection,
+            ai::commands::ai_index_status,
+            ai::commands::ai_build_index,
+            ai::commands::ai_cancel_index,
+            ai::commands::ai_cancel,
+            ai::commands::ai_estimate,
+            ai::commands::search_messages,
+            ai::commands::message_context,
+            ai::commands::ai_ask,
+            ai::commands::ai_summarize_chat,
+            ai::commands::ai_chat_topics,
+            ai::commands::query_year_insights,
+            ai::commands::ai_year_report,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Chat Insight");

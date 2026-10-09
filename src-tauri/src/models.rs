@@ -111,6 +111,20 @@ pub struct MessageItem {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SearchHit {
+    pub chat_id: String,
+    pub chat_name: String,
+    pub chat_kind: String,
+    pub local_id: i64,
+    pub occurred_at: String,
+    pub sender_name: String,
+    pub is_from_me: bool,
+    pub kind: String,
+    pub text: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct MediaInfo {
     pub image: bool,
     pub video: bool,

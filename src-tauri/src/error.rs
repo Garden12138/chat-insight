@@ -12,6 +12,8 @@ pub enum AppError {
     Validation(String),
     #[error("{0}")]
     Bridge(String),
+    #[error("{0}")]
+    Ai(String),
 }
 
 pub type AppResult<T> = Result<T, AppError>;

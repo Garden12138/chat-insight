@@ -20,10 +20,12 @@ echarts.use([
 interface ChartProps {
   option: EChartsOption;
   height?: number;
+  /** Grow to fill the rest of a `.chart-panel` instead of using a fixed height. */
+  fill?: boolean;
   ariaLabel: string;
 }
 
-export function Chart({ option, height = 300, ariaLabel }: ChartProps) {
+export function Chart({ option, height = 300, fill = false, ariaLabel }: ChartProps) {
   const elementRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -38,5 +40,5 @@ export function Chart({ option, height = 300, ariaLabel }: ChartProps) {
     };
   }, [option]);
 
-  return <div ref={elementRef} className="chart" style={{ height }} role="img" aria-label={ariaLabel} />;
+  return <div ref={elementRef} className={fill ? "chart fill" : "chart"} style={fill ? undefined : { height }} role="img" aria-label={ariaLabel} />;
 }

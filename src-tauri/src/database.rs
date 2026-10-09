@@ -2,11 +2,69 @@ use crate::analysis::top_keywords;
 use crate::error::AppResult;
 use crate::models::{
     AccountSummary, ChatDetailData, ChatListItem, DashboardData, DateRange, HeatmapPoint,
-    HourlyPoint, MessageItem, NormalizedMessage, RankedChat, SummaryMetrics, TrendPoint, TypeCount,
+    HourlyPoint, MessageItem, NormalizedMessage, RankedChat, SearchHit, SummaryMetrics, TrendPoint,
+    TypeCount,
 };
 use chrono::Utc;
+use rusqlite::types::Value as SqlValue;
 use rusqlite::{params, Connection};
 use std::path::PathBuf;
+
+/// Full-text index over message text plus the AI tables. The FTS table borrows its
+/// content from `messages` and is kept in step by triggers, so sync and import need no
+/// extra work.
+const SCHEMA_V2: &str = r#"
+CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(
+    text, content='messages', content_rowid='rowid', tokenize='trigram'
+);
+CREATE TRIGGER IF NOT EXISTS messages_fts_insert AFTER INSERT ON messages BEGIN
+    INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_fts_delete AFTER DELETE ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS messages_fts_update AFTER UPDATE OF text ON messages BEGIN
+    INSERT INTO messages_fts(messages_fts, rowid, text) VALUES ('delete', old.rowid, old.text);
+    INSERT INTO messages_fts(rowid, text) VALUES (new.rowid, new.text);
+END;
+CREATE TABLE IF NOT EXISTS ai_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    start_local_id INTEGER NOT NULL,
+    end_local_id INTEGER NOT NULL,
+    start_at TEXT NOT NULL,
+    end_at TEXT NOT NULL,
+    local_date TEXT NOT NULL,
+    message_count INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    embedding BLOB NOT NULL,
+    FOREIGN KEY (account_id, chat_id) REFERENCES chats(account_id, chat_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_ai_chunks_scope ON ai_chunks(account_id, model, chat_id, local_date);
+CREATE TABLE IF NOT EXISTS ai_index_cursors (
+    account_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    last_local_id INTEGER NOT NULL,
+    PRIMARY KEY (account_id, chat_id, model),
+    FOREIGN KEY (account_id, chat_id) REFERENCES chats(account_id, chat_id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS ai_cache (
+    account_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    range_from TEXT NOT NULL,
+    range_to TEXT NOT NULL,
+    model TEXT NOT NULL,
+    input_hash TEXT NOT NULL,
+    result_json TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, kind, scope, range_from, range_to, model),
+    FOREIGN KEY (account_id) REFERENCES accounts(id) ON DELETE CASCADE
+);
+"#;
 
 #[derive(Debug, Clone)]
 pub struct Database {
@@ -30,10 +88,10 @@ impl Database {
             std::fs::create_dir_all(parent)?;
         }
         let connection = self.connection()?;
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         connection.execute_batch(
             r#"
             PRAGMA journal_mode = WAL;
-            PRAGMA user_version = 1;
             CREATE TABLE IF NOT EXISTS accounts (
                 id TEXT PRIMARY KEY,
                 display_name TEXT NOT NULL,
@@ -90,6 +148,14 @@ impl Database {
             );
             "#,
         )?;
+        if version < 2 {
+            let transaction = connection.unchecked_transaction()?;
+            transaction.execute_batch(SCHEMA_V2)?;
+            transaction.execute_batch(
+                "INSERT INTO messages_fts(messages_fts) VALUES('rebuild'); PRAGMA user_version = 2;",
+            )?;
+            transaction.commit()?;
+        }
         Ok(())
     }
 
@@ -416,6 +482,113 @@ impl Database {
         })
     }
 
+    /// Keyword search over message text. Every whitespace-separated term must match;
+    /// terms of three or more characters use the trigram index, shorter ones fall back
+    /// to `LIKE` because trigrams cannot represent them.
+    pub fn search_messages(
+        &self,
+        account_id: &str,
+        query: &str,
+        chat_id: Option<&str>,
+        range: &DateRange,
+        limit: i64,
+    ) -> AppResult<Vec<SearchHit>> {
+        let mut terms: Vec<&str> = Vec::new();
+        for term in query.split_whitespace() {
+            if !terms.contains(&term) && terms.len() < 6 {
+                terms.push(term);
+            }
+        }
+        if terms.is_empty() {
+            return Ok(Vec::new());
+        }
+        let mut sql = String::from(
+            "SELECT m.chat_id, c.display_name, c.chat_kind, m.local_id, m.occurred_at, m.sender_name, m.is_from_me, m.kind, m.text
+             FROM messages m JOIN chats c ON c.account_id=m.account_id AND c.chat_id=m.chat_id
+             WHERE m.account_id=?1 AND (?2 IS NULL OR m.chat_id=?2)
+               AND (?3 IS NULL OR m.local_date>=?3) AND (?4 IS NULL OR m.local_date<=?4) AND m.text<>''",
+        );
+        let mut values: Vec<SqlValue> = vec![
+            account_id.to_string().into(),
+            chat_id.map(str::to_string).into(),
+            range.from.clone().into(),
+            range.to.clone().into(),
+        ];
+        let fts_terms: Vec<String> = terms
+            .iter()
+            .filter(|term| term.chars().count() >= 3)
+            .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+            .collect();
+        if !fts_terms.is_empty() {
+            values.push(fts_terms.join(" ").into());
+            sql.push_str(&format!(
+                " AND m.rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ?{})",
+                values.len()
+            ));
+        }
+        for term in terms.iter().filter(|term| term.chars().count() < 3) {
+            values.push(format!("%{}%", escape_like(term)).into());
+            sql.push_str(&format!(" AND m.text LIKE ?{} ESCAPE '\\'", values.len()));
+        }
+        values.push(limit.clamp(1, 500).into());
+        sql.push_str(&format!(
+            " ORDER BY m.occurred_at DESC, m.local_id DESC LIMIT ?{}",
+            values.len()
+        ));
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(&sql)?;
+        let rows = statement.query_map(rusqlite::params_from_iter(values), |row| {
+            Ok(SearchHit {
+                chat_id: row.get(0)?,
+                chat_name: row.get(1)?,
+                chat_kind: row.get(2)?,
+                local_id: row.get(3)?,
+                occurred_at: row.get(4)?,
+                sender_name: row.get(5)?,
+                is_from_me: row.get::<_, i64>(6)? != 0,
+                kind: row.get(7)?,
+                text: row.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    /// Messages surrounding `local_id` in one chat, oldest first.
+    pub fn message_context(
+        &self,
+        account_id: &str,
+        chat_id: &str,
+        local_id: i64,
+        radius: i64,
+    ) -> AppResult<Vec<MessageItem>> {
+        let connection = self.connection()?;
+        let radius = radius.clamp(0, 50);
+        let mut statement = connection.prepare(
+            "SELECT * FROM (
+                SELECT local_id, server_id, occurred_at, sender_name, is_from_me, kind, text FROM messages
+                WHERE account_id=?1 AND chat_id=?2 AND local_id<?3 ORDER BY local_id DESC LIMIT ?4
+             )
+             UNION ALL
+             SELECT * FROM (
+                SELECT local_id, server_id, occurred_at, sender_name, is_from_me, kind, text FROM messages
+                WHERE account_id=?1 AND chat_id=?2 AND local_id>=?3 ORDER BY local_id LIMIT ?4 + 1
+             )
+             ORDER BY local_id",
+        )?;
+        let rows = statement.query_map(params![account_id, chat_id, local_id, radius], |row| {
+            Ok(MessageItem {
+                local_id: row.get(0)?,
+                server_id: row.get(1)?,
+                occurred_at: row.get(2)?,
+                sender_name: row.get(3)?,
+                is_from_me: row.get::<_, i64>(4)? != 0,
+                kind: row.get(5)?,
+                text: row.get(6)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     pub fn clear_account(&self, account_id: &str) -> AppResult<()> {
         let connection = self.connection()?;
         connection.execute("DELETE FROM accounts WHERE id=?1", params![account_id])?;
@@ -446,7 +619,15 @@ impl Database {
             "UPDATE accounts SET id=?2, display_name=?3 WHERE id=?1",
             params![legacy_id, account_id, display_name],
         )?;
-        for table in ["chats", "messages", "sync_cursors", "sync_runs"] {
+        for table in [
+            "chats",
+            "messages",
+            "sync_cursors",
+            "sync_runs",
+            "ai_chunks",
+            "ai_index_cursors",
+            "ai_cache",
+        ] {
             transaction.execute(
                 &format!("UPDATE {table} SET account_id=?2 WHERE account_id=?1"),
                 params![legacy_id, account_id],
@@ -455,6 +636,12 @@ impl Database {
         transaction.commit()?;
         Ok(true)
     }
+}
+
+pub(crate) fn escape_like(term: &str) -> String {
+    term.replace('\\', "\\\\")
+        .replace('%', "\\%")
+        .replace('_', "\\_")
 }
 
 fn query_trend(
@@ -574,6 +761,112 @@ mod tests {
         assert!(accounts.iter().all(|a| a.id != "legacy"));
         assert_eq!(db.max_local_id("wechat:wxid_a", "alice").unwrap(), Some(7));
         assert_eq!(db.max_local_id("account", "alice").unwrap(), None);
+    }
+
+    fn text_message(local_id: i64, text: &str) -> NormalizedMessage {
+        NormalizedMessage {
+            text: text.into(),
+            ..message(local_id, "2026-08-20", 9, local_id % 2 == 0)
+        }
+    }
+
+    fn fts_count(db: &Database) -> i64 {
+        db.connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM messages_fts WHERE messages_fts MATCH '\"公园拍\"'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn migrates_v1_database_and_backfills_search_index() {
+        let directory = tempdir().unwrap().keep();
+        let path = directory.join("v1.db");
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch(
+                "PRAGMA user_version = 1;
+                 CREATE TABLE accounts (id TEXT PRIMARY KEY, display_name TEXT NOT NULL, source_platform TEXT NOT NULL, created_at TEXT NOT NULL, last_sync_at TEXT);
+                 CREATE TABLE chats (account_id TEXT NOT NULL, chat_id TEXT NOT NULL, display_name TEXT NOT NULL, chat_kind TEXT NOT NULL, last_message_at TEXT, PRIMARY KEY (account_id, chat_id));
+                 CREATE TABLE messages (account_id TEXT NOT NULL, chat_id TEXT NOT NULL, local_id INTEGER NOT NULL, server_id TEXT, occurred_at TEXT NOT NULL, local_date TEXT NOT NULL, local_hour INTEGER NOT NULL, local_weekday INTEGER NOT NULL, sender_id TEXT NOT NULL DEFAULT '', sender_name TEXT NOT NULL DEFAULT '', is_from_me INTEGER NOT NULL, kind TEXT NOT NULL, text TEXT NOT NULL DEFAULT '', PRIMARY KEY (account_id, chat_id, local_id));
+                 INSERT INTO accounts VALUES ('account', '测试账号', 'fixture', '2026-01-01', NULL);
+                 INSERT INTO chats VALUES ('account', 'alice', '小艾', 'direct', NULL);
+                 INSERT INTO messages VALUES ('account', 'alice', 1, 's1', '2026-08-20T09:00:00+08:00', '2026-08-20', 9, 3, 'alice', '小艾', 0, 'text', '周末一起去公园拍照');",
+            )
+            .unwrap();
+        drop(connection);
+
+        let db = Database::new(&path);
+        db.initialize().unwrap();
+        db.initialize().unwrap();
+        let version: i64 = db
+            .connection()
+            .unwrap()
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 2);
+        assert_eq!(fts_count(&db), 1);
+        let hits = db
+            .search_messages("account", "公园拍照", None, &DateRange::default(), 20)
+            .unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].chat_name, "小艾");
+    }
+
+    #[test]
+    fn search_index_follows_inserts_and_cascading_deletes() {
+        let db = fixture_db();
+        db.insert_message("account", &text_message(1, "周末一起去公园拍照"))
+            .unwrap();
+        db.insert_message("account", &text_message(2, "明天公司开会"))
+            .unwrap();
+        assert_eq!(fts_count(&db), 1);
+        db.clear_account("account").unwrap();
+        assert_eq!(fts_count(&db), 0);
+    }
+
+    #[test]
+    fn search_combines_trigram_and_short_terms() {
+        let db = fixture_db();
+        db.insert_message("account", &text_message(1, "周末一起去公园拍照"))
+            .unwrap();
+        db.insert_message("account", &text_message(2, "公园门票 100% 打折"))
+            .unwrap();
+        db.insert_message("account", &text_message(3, "下周去北京出差"))
+            .unwrap();
+        let search = |query: &str| {
+            db.search_messages("account", query, Some("alice"), &DateRange::default(), 20)
+                .unwrap()
+                .iter()
+                .map(|hit| hit.local_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(search("公园"), vec![2, 1]);
+        assert_eq!(search("公园 拍照"), vec![1]);
+        assert_eq!(search("去公园拍"), vec![1]);
+        assert_eq!(search("100%"), vec![2]);
+        assert_eq!(search("%"), vec![2]);
+        assert!(search("上海").is_empty());
+        assert!(search("   ").is_empty());
+    }
+
+    #[test]
+    fn returns_message_context_in_order() {
+        let db = fixture_db();
+        for id in 1..=9 {
+            db.insert_message("account", &text_message(id, &format!("消息{id}")))
+                .unwrap();
+        }
+        let context = db.message_context("account", "alice", 5, 2).unwrap();
+        assert_eq!(
+            context.iter().map(|item| item.local_id).collect::<Vec<_>>(),
+            vec![3, 4, 5, 6, 7]
+        );
+        let edge = db.message_context("account", "alice", 1, 2).unwrap();
+        assert_eq!(edge.len(), 3);
     }
 
     #[test]

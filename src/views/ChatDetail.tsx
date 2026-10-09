@@ -7,7 +7,10 @@ import { EmptyState, LoadingState } from "../components/States";
 import { Icon } from "../components/Icons";
 import { Lightbox } from "../components/Lightbox";
 import { MediaBubble } from "../components/MediaBubble";
+import { AiSummaryPanel } from "../components/AiSummaryPanel";
+import { TopicsPanel } from "../components/TopicsPanel";
 import { isMediaKind, isPreviewKind } from "../media";
+import { withEmoji } from "../emoji";
 import { chartTheme } from "../theme";
 import { formatCount, formatDateTime, messageKindLabel } from "../utils";
 
@@ -109,18 +112,14 @@ export function ChatDetail({ accountId, range, revision, requestedChatId }: Chat
               <div className="detail-totals"><span><strong>{formatCount(detail.totalMessages)}</strong>条消息</span><span><strong>{detail.totalMessages ? Math.round((detail.sentMessages / detail.totalMessages) * 100) : 0}%</strong>由我发送</span></div>
             </header>
 
+            <AiSummaryPanel accountId={accountId} chatId={detail.chat.id} chatName={detail.chat.displayName} range={range} revision={revision} />
+
             <div className="detail-charts">
               <section className="panel"><div className="panel-heading"><div><p className="eyebrow">TIMELINE</p><h2>聊天趋势</h2></div></div><Chart option={trendOption} height={240} ariaLabel="当前聊天消息趋势" /></section>
               <section className="panel"><div className="panel-heading"><div><p className="eyebrow">DAILY RHYTHM</p><h2>24 小时节奏</h2></div></div><Chart option={hourOption} height={240} ariaLabel="当前聊天小时活跃趋势" /></section>
             </div>
 
-            <section className="panel keyword-panel">
-              <div className="panel-heading"><div><p className="eyebrow">LOCAL KEYWORDS</p><h2>常聊关键词</h2></div><span className="subtle">仅分析本地文本消息</span></div>
-              <div className="keyword-cloud">
-                {detail.keywords.map((item, index) => <span key={item.word} style={{ fontSize: `${Math.max(13, 21 - index * .35)}px` }}>{item.word}<small>{item.count}</small></span>)}
-                {!detail.keywords.length && <p className="list-empty">当前范围内没有足够的文本关键词</p>}
-              </div>
-            </section>
+            <TopicsPanel accountId={accountId} chatId={detail.chat.id} chatName={detail.chat.displayName} range={range} revision={revision} keywords={detail.keywords} />
 
             <section className="panel timeline-panel">
               <div className="panel-heading"><div><p className="eyebrow">MESSAGES</p><h2>消息时间线</h2></div><span className="subtle">已显示 {detail.messages.length} 条</span></div>
@@ -130,7 +129,7 @@ export function ChatDetail({ accountId, range, revision, requestedChatId }: Chat
                     <div className="message-meta"><strong>{message.isFromMe ? "我" : message.senderName || "对方"}</strong><time>{formatDateTime(message.occurredAt)}</time></div>
                     {isPreviewKind(message.kind)
                       ? <MediaBubble accountId={accountId} chatId={selectedId} message={message} onOpen={() => setViewerIndex(mediaMessages.indexOf(message))} />
-                      : <p>{message.text || `[${messageKindLabel[message.kind] ?? message.kind}]`}</p>}
+                      : <p>{message.text ? withEmoji(message.text) : `[${messageKindLabel[message.kind] ?? message.kind}]`}</p>}
                   </article>
                 ))}
               </div>

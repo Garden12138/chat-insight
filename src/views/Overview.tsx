@@ -37,7 +37,7 @@ export function Overview({ accountId, range, revision, onOpenDetail }: OverviewP
     return {
       animationDuration: 500,
       tooltip: { ...chartTheme.tooltip, trigger: "axis", valueFormatter: (value) => `${value} 条` },
-      grid: { top: 16, right: 18, bottom: 30, left: 46 },
+      grid: { top: 16, right: 18, bottom: 14, left: 12, containLabel: true },
       xAxis: { type: "category", data: trend.map((item) => item.bucket), axisLabel: { color: chartText, hideOverlap: true }, axisLine: { lineStyle: { color: gridLine } } },
       yAxis: { type: "value", minInterval: 1, axisLabel: { color: chartText }, splitLine: { lineStyle: { color: gridLine } } },
       series: [{ type: "line", data: trend.map((item) => item.count), showSymbol: false, smooth: 0.22, lineStyle: { width: 3, color: chartTheme.accent }, areaStyle: { color: chartTheme.areaGradient } }],
@@ -90,9 +90,9 @@ export function Overview({ accountId, range, revision, onOpenDetail }: OverviewP
       </div>
 
       <div className="dashboard-grid">
-        <section className="panel span-2">
+        <section className="panel span-2 chart-panel">
           <div className="panel-heading"><div><p className="eyebrow">MESSAGE RHYTHM</p><h2>消息趋势</h2></div></div>
-          <Chart option={trendOption} height={310} ariaLabel="消息数量趋势图" />
+          <Chart option={trendOption} fill ariaLabel="消息数量趋势图" />
         </section>
         <section className="panel">
           <div className="panel-heading"><div><p className="eyebrow">CONVERSATIONS</p><h2>最常聊天</h2></div></div>

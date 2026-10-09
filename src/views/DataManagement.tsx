@@ -1,6 +1,7 @@
 import type { AccountSummary, PlatformCapabilities } from "../types";
 import { Icon } from "../components/Icons";
 import { InlineNotice } from "../components/States";
+import { AiSettings } from "../components/AiSettings";
 
 interface DataManagementProps {
   account: AccountSummary;
@@ -53,6 +54,8 @@ export function DataManagement({ account, capabilities, busy, onSync, onSwitchAc
           <button className="danger-button" disabled={busy} onClick={onClear}>清空缓存</button>
         </article>
       </div>
+
+      <AiSettings accountId={account.id} />
 
       {!capabilities.directWechatRead && <InlineNotice tone="info">当前平台采用导入分析模式。你仍可以使用全部图表、筛选和聊天详情功能。</InlineNotice>}
     </div>
