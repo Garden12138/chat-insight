@@ -19,10 +19,18 @@ export function Lightbox({ accountId, chatId, messages, index, onIndexChange, on
   const [info, setInfo] = useState<MediaInfo>();
   const [zoomed, setZoomed] = useState(false);
   const closeRef = useRef<HTMLButtonElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const hasPrevious = index > 0;
   const hasNext = index < messages.length - 1;
 
   useEffect(() => { closeRef.current?.focus(); }, []);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!zoomed || !stage) return;
+    stage.scrollLeft = (stage.scrollWidth - stage.clientWidth) / 2;
+    stage.scrollTop = (stage.scrollHeight - stage.clientHeight) / 2;
+  }, [zoomed]);
 
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
@@ -39,7 +47,7 @@ export function Lightbox({ accountId, chatId, messages, index, onIndexChange, on
     let active = true;
     setInfo(undefined);
     setZoomed(false);
-    api.mediaInfo(accountId, chatId, message.localId)
+    api.mediaInfo(accountId, chatId, message.localId, message.kind)
       .then((value) => active && setInfo(value))
       .catch((reason) => active && setInfo({ image: false, video: false, poster: false, reason: errorMessage(reason) }));
     return () => { active = false; };
@@ -61,7 +69,7 @@ export function Lightbox({ accountId, chatId, messages, index, onIndexChange, on
         <div><strong>{message.isFromMe ? "我" : message.senderName || "对方"}</strong><span>{formatDateTime(message.occurredAt)} · {index + 1} / {messages.length}</span></div>
         <button ref={closeRef} type="button" className="lightbox-close" aria-label="关闭" onClick={onClose}><Icon name="close" /></button>
       </header>
-      <div className={`lightbox-stage${zoomed ? " zoomed" : ""}`} onClick={(event) => event.stopPropagation()}>{stage}</div>
+      <div ref={stageRef} className={`lightbox-stage${zoomed ? " zoomed" : ""}`} onClick={(event) => event.stopPropagation()}>{stage}</div>
       {hasPrevious && <button type="button" className="lightbox-nav previous" aria-label="上一个" onClick={(event) => { event.stopPropagation(); onIndexChange(index - 1); }}><Icon name="chevronLeft" /></button>}
       {hasNext && <button type="button" className="lightbox-nav next" aria-label="下一个" onClick={(event) => { event.stopPropagation(); onIndexChange(index + 1); }}><Icon name="chevron" /></button>}
     </div>

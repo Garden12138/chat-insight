@@ -12,6 +12,8 @@ interface MediaBubbleProps {
   onOpen: () => void;
 }
 
+const labels: Record<string, string> = { image: "图片", video: "视频", sticker: "表情" };
+
 function useInView<T extends Element>() {
   const ref = useRef<T>(null);
   const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
@@ -31,27 +33,36 @@ export function MediaBubble({ accountId, chatId, message, onOpen }: MediaBubbleP
   const [ref, visible] = useInView<HTMLDivElement>();
   const [info, setInfo] = useState<MediaInfo>();
   const [broken, setBroken] = useState(false);
-  const isVideo = message.kind === "video";
-  const label = isVideo ? "视频" : "图片";
+  const { kind, localId } = message;
+  const isVideo = kind === "video";
+  const label = labels[kind] ?? "媒体";
 
   useEffect(() => {
     if (!visible) return;
     let active = true;
-    api.mediaInfo(accountId, chatId, message.localId)
+    api.mediaInfo(accountId, chatId, localId, kind)
       .then((value) => active && setInfo(value))
       .catch((reason) => active && setInfo({ image: false, video: false, poster: false, reason: errorMessage(reason) }));
     return () => { active = false; };
-  }, [visible, accountId, chatId, message.localId]);
+  }, [visible, accountId, chatId, localId, kind]);
 
-  if (!info) return <div ref={ref} className="media-bubble loading" role="status" aria-label={`正在加载${label}`} />;
+  if (!info) return <div ref={ref} className={`media-bubble loading${kind === "sticker" ? " sticker" : ""}`} role="status" aria-label={`正在加载${label}`} />;
 
   const viewable = info.image || info.video || info.poster;
   if (!viewable || broken) {
     return (
-      <div ref={ref} className="media-bubble missing">
+      <div ref={ref} className={`media-bubble missing${kind === "sticker" ? " sticker" : ""}`}>
         <Icon name="image" />
         <span>{label}不可预览</span>
         <small>{broken ? "文件无法显示" : info.reason ?? "媒体已不在本机"}</small>
+      </div>
+    );
+  }
+
+  if (kind === "sticker") {
+    return (
+      <div ref={ref} className="media-bubble sticker">
+        <img src={mediaUrl("sticker", accountId, chatId, localId)} alt="表情" loading="lazy" onError={() => setBroken(true)} />
       </div>
     );
   }
@@ -61,8 +72,8 @@ export function MediaBubble({ accountId, chatId, message, onOpen }: MediaBubbleP
     <div ref={ref} className={`media-bubble ${isVideo ? "video" : "image"}`}>
       <button type="button" onClick={onOpen} aria-label={isVideo ? "播放视频" : "查看图片"}>
         {thumb
-          ? <img src={mediaUrl("poster", accountId, chatId, message.localId)} alt="" loading="lazy" onError={() => setBroken(true)} />
-          : <video src={`${mediaUrl("video", accountId, chatId, message.localId)}#t=0.1`} preload="metadata" muted playsInline aria-hidden="true" onError={() => setBroken(true)} />}
+          ? <img src={mediaUrl("poster", accountId, chatId, localId)} alt="" loading="lazy" onError={() => setBroken(true)} />
+          : <video src={`${mediaUrl("video", accountId, chatId, localId)}#t=0.1`} preload="metadata" muted playsInline aria-hidden="true" onError={() => setBroken(true)} />}
         {isVideo && <span className="media-play"><Icon name="play" /></span>}
       </button>
     </div>

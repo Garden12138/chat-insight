@@ -8,7 +8,7 @@ mod portable;
 mod wechat_account;
 
 use database::Database;
-use media::MediaResolver;
+use media::{MediaKind, MediaResolver};
 use models::{
     AccountSummary, BootstrapResult, ChatDetailData, ChatListItem, DashboardData, DateRange,
     ExportResult, ImportResult, MediaInfo, PlatformCapabilities, SyncResult,
@@ -166,10 +166,12 @@ async fn media_info(
     account_id: String,
     chat_id: String,
     local_id: i64,
+    kind: String,
 ) -> Result<MediaInfo, String> {
     let resolver = resolver.inner().clone();
+    let kind = MediaKind::from_message_kind(&kind);
     tauri::async_runtime::spawn_blocking(move || {
-        resolver.info(&app, &account_id, &chat_id, local_id)
+        resolver.info(&app, &account_id, &chat_id, local_id, kind)
     })
     .await
     .map_err(|_| "媒体读取任务意外结束".to_string())
@@ -227,7 +229,7 @@ pub fn run() {
             let _ = wechat_account::adopt_legacy_dataset(&database);
             let account_store = AccountStore::new(app_data.join("wechat-accounts"));
             app.manage(AppState::new(database, account_store));
-            app.manage(MediaResolver::default());
+            app.manage(MediaResolver::new(app_data.join("sticker-cache")));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

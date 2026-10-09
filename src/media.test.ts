@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isMediaKind, mediaUrl } from "./media";
+import { isMediaKind, isPreviewKind, mediaUrl } from "./media";
 
 describe("mediaUrl", () => {
   it("encodes every segment for the chatmedia protocol", () => {
@@ -15,5 +15,8 @@ describe("mediaUrl", () => {
     expect(isMediaKind("image")).toBe(true);
     expect(isMediaKind("video")).toBe(true);
     expect(isMediaKind("text")).toBe(false);
+    expect(isMediaKind("sticker")).toBe(false);
+    expect(isPreviewKind("sticker")).toBe(true);
+    expect(isPreviewKind("voice")).toBe(false);
   });
 });

@@ -7,7 +7,7 @@ import { EmptyState, LoadingState } from "../components/States";
 import { Icon } from "../components/Icons";
 import { Lightbox } from "../components/Lightbox";
 import { MediaBubble } from "../components/MediaBubble";
-import { isMediaKind } from "../media";
+import { isMediaKind, isPreviewKind } from "../media";
 import { chartTheme } from "../theme";
 import { formatCount, formatDateTime, messageKindLabel } from "../utils";
 
@@ -126,9 +126,9 @@ export function ChatDetail({ accountId, range, revision, requestedChatId }: Chat
               <div className="panel-heading"><div><p className="eyebrow">MESSAGES</p><h2>消息时间线</h2></div><span className="subtle">已显示 {detail.messages.length} 条</span></div>
               <div className="message-timeline">
                 {detail.messages.map((message) => (
-                  <article key={`${message.localId}-${message.serverId ?? ""}`} className={`${message.isFromMe ? "mine" : "theirs"}${isMediaKind(message.kind) ? " has-media" : ""}`}>
+                  <article key={`${message.localId}-${message.serverId ?? ""}`} className={`${message.isFromMe ? "mine" : "theirs"}${isPreviewKind(message.kind) ? " has-media" : ""}`}>
                     <div className="message-meta"><strong>{message.isFromMe ? "我" : message.senderName || "对方"}</strong><time>{formatDateTime(message.occurredAt)}</time></div>
-                    {isMediaKind(message.kind)
+                    {isPreviewKind(message.kind)
                       ? <MediaBubble accountId={accountId} chatId={selectedId} message={message} onOpen={() => setViewerIndex(mediaMessages.indexOf(message))} />
                       : <p>{message.text || `[${messageKindLabel[message.kind] ?? message.kind}]`}</p>}
                   </article>

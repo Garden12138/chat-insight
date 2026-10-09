@@ -31,7 +31,23 @@ describe("MediaBubble", () => {
     render(<MediaBubble accountId="a" chatId="c" message={message(1, "image")} onOpen={onOpen} />);
     fireEvent.click(await screen.findByRole("button", { name: "查看图片" }));
     expect(onOpen).toHaveBeenCalledOnce();
-    expect(mocks.api.mediaInfo).toHaveBeenCalledWith("a", "c", 1);
+    expect(mocks.api.mediaInfo).toHaveBeenCalledWith("a", "c", 1, "image");
+  });
+
+  it("renders stickers inline without opening the viewer", async () => {
+    mocks.api.mediaInfo.mockResolvedValue({ image: true, video: false, poster: true });
+    render(<MediaBubble accountId="a" chatId="c" message={message(5, "sticker")} onOpen={() => {}} />);
+    const sticker = await screen.findByRole("img", { name: "表情" });
+    expect(sticker).toHaveAttribute("src", "chatmedia://localhost/sticker/a/c/5");
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+    expect(mocks.api.mediaInfo).toHaveBeenCalledWith("a", "c", 5, "sticker");
+  });
+
+  it("explains why a sticker cannot be shown", async () => {
+    mocks.api.mediaInfo.mockResolvedValue({ image: false, video: false, poster: false, reason: "这个表情没有可下载的图片" });
+    render(<MediaBubble accountId="a" chatId="c" message={message(6, "sticker")} onOpen={() => {}} />);
+    expect(await screen.findByText("表情不可预览")).toBeVisible();
+    expect(screen.getByText("这个表情没有可下载的图片")).toBeVisible();
   });
 
   it("offers playback for videos", async () => {

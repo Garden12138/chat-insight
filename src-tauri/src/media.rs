@@ -16,23 +16,68 @@ const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "m4v"];
 const MAX_CHUNK: u64 = 4 * 1024 * 1024;
 const NOT_CURRENT_ACCOUNT: &str = "只有当前连接的微信账号可以查看图片和视频";
 const MEDIA_MISSING: &str = "媒体已不在本机，可在微信中打开后重试";
+const STICKER_MISSING: &str = "这个表情没有可下载的图片";
+const STICKER_DOWNLOAD_FAILED: &str = "表情下载失败，请检查网络后重试";
+const MAX_STICKER_BYTES: u64 = 10 * 1024 * 1024;
+const STICKER_HOSTS: &[&str] = &["qq.com", "qpic.cn"];
 
 type CacheKey = (String, String, i64);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaKind {
+    Media,
+    Sticker,
+}
+
+impl MediaKind {
+    pub fn from_message_kind(kind: &str) -> Self {
+        if kind == "sticker" {
+            Self::Sticker
+        } else {
+            Self::Media
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StickerSource {
+    pub md5: String,
+    pub url: String,
+}
+
 /// Resolves message media through the bridge, one bridge process at a time.
-#[derive(Clone, Default)]
+/// Stickers only exist on WeChat's CDN, so they are downloaded once into `sticker_dir`.
+#[derive(Clone)]
 pub struct MediaResolver {
     cache: Arc<Mutex<HashMap<CacheKey, MediaPaths>>>,
     bridge: Arc<Mutex<()>>,
+    sticker_dir: PathBuf,
 }
 
 impl MediaResolver {
+    pub fn new(sticker_dir: PathBuf) -> Self {
+        Self {
+            cache: Arc::default(),
+            bridge: Arc::default(),
+            sticker_dir,
+        }
+    }
+
+    fn run_bridge(&self, paths: &BridgePaths, args: &[&str]) -> AppResult<Value> {
+        let _guard = self
+            .bridge
+            .lock()
+            .map_err(|_| AppError::Bridge("媒体读取任务意外结束".into()))?;
+        bridge::run_json(paths, args)
+    }
+
     pub fn resolve(
         &self,
         app: &AppHandle,
         account_id: &str,
         chat_id: &str,
         local_id: i64,
+        kind: MediaKind,
     ) -> AppResult<MediaPaths> {
         let key = (account_id.to_string(), chat_id.to_string(), local_id);
         if let Some(hit) = self
@@ -49,17 +94,41 @@ impl MediaResolver {
         let identity =
             ensure_current_account(wechat_account::current_bridge_identity()?, account_id)?;
         let paths = BridgePaths::resolve(app);
-        let value = {
-            let _guard = self
-                .bridge
-                .lock()
-                .map_err(|_| AppError::Bridge("媒体读取任务意外结束".into()))?;
-            bridge::run_json(
-                &paths,
-                &["media", chat_id, "--local-id", &local_id.to_string()],
-            )?
+        let local_id_arg = local_id.to_string();
+        let found = match kind {
+            MediaKind::Media => {
+                let value =
+                    self.run_bridge(&paths, &["media", chat_id, "--local-id", &local_id_arg])?;
+                parse_media(&value, &media_roots(&identity))
+            }
+            MediaKind::Sticker => {
+                let value = self.run_bridge(
+                    &paths,
+                    &[
+                        "context",
+                        chat_id,
+                        "--local-id",
+                        &local_id_arg,
+                        "--before-count",
+                        "0",
+                        "--after-count",
+                        "0",
+                        "--include-debug",
+                    ],
+                )?;
+                match parse_sticker(&value, local_id) {
+                    Some(source) => {
+                        let file = self.sticker_file(&source)?;
+                        MediaPaths {
+                            image: Some(file.clone()),
+                            video: None,
+                            poster: Some(file),
+                        }
+                    }
+                    None => MediaPaths::default(),
+                }
+            }
         };
-        let found = parse_media(&value, &media_roots(&identity));
         if !found.is_empty() {
             if let Ok(mut cache) = self.cache.lock() {
                 cache.insert(key, found.clone());
@@ -68,19 +137,54 @@ impl MediaResolver {
         Ok(found)
     }
 
+    /// Returns the cached sticker, downloading it from WeChat's CDN on first use.
+    fn sticker_file(&self, source: &StickerSource) -> AppResult<PathBuf> {
+        for extension in ["gif", "png", "jpg", "webp"] {
+            let cached = self.sticker_dir.join(format!("{}.{extension}", source.md5));
+            if cached.is_file() {
+                return Ok(cached);
+            }
+        }
+        let failed = || AppError::Bridge(STICKER_DOWNLOAD_FAILED.into());
+        let response = ureq::get(&source.url)
+            .timeout(std::time::Duration::from_secs(15))
+            .call()
+            .map_err(|_| failed())?;
+        let mut bytes = Vec::new();
+        response
+            .into_reader()
+            .take(MAX_STICKER_BYTES)
+            .read_to_end(&mut bytes)
+            .map_err(|_| failed())?;
+        let extension = sniff_image(&bytes).ok_or_else(failed)?;
+        std::fs::create_dir_all(&self.sticker_dir)?;
+        let target = self.sticker_dir.join(format!("{}.{extension}", source.md5));
+        let partial = target.with_extension("part");
+        std::fs::write(&partial, &bytes)?;
+        std::fs::rename(&partial, &target)?;
+        Ok(target)
+    }
+
     pub fn info(
         &self,
         app: &AppHandle,
         account_id: &str,
         chat_id: &str,
         local_id: i64,
+        kind: MediaKind,
     ) -> MediaInfo {
-        match self.resolve(app, account_id, chat_id, local_id) {
+        match self.resolve(app, account_id, chat_id, local_id, kind) {
             Ok(paths) => MediaInfo {
                 image: paths.image.is_some(),
                 video: paths.video.is_some(),
                 poster: paths.poster.is_some(),
-                reason: paths.is_empty().then(|| MEDIA_MISSING.into()),
+                reason: paths.is_empty().then(|| {
+                    match kind {
+                        MediaKind::Media => MEDIA_MISSING,
+                        MediaKind::Sticker => STICKER_MISSING,
+                    }
+                    .into()
+                }),
             },
             Err(error) => MediaInfo {
                 image: false,
@@ -125,12 +229,16 @@ pub fn respond(app: &AppHandle, request: &Request<Vec<u8>>) -> Response<Vec<u8>>
 
 fn serve(app: &AppHandle, request: &Request<Vec<u8>>) -> Result<Response<Vec<u8>>, StatusCode> {
     let media = parse_request_path(request.uri().path()).ok_or(StatusCode::BAD_REQUEST)?;
+    let kind = match media.variant {
+        MediaVariant::Sticker => MediaKind::Sticker,
+        _ => MediaKind::Media,
+    };
     let paths = app
         .state::<MediaResolver>()
-        .resolve(app, &media.account_id, &media.chat_id, media.local_id)
+        .resolve(app, &media.account_id, &media.chat_id, media.local_id, kind)
         .map_err(|_| StatusCode::FORBIDDEN)?;
     let path = match media.variant {
-        MediaVariant::Image => paths.image,
+        MediaVariant::Image | MediaVariant::Sticker => paths.image,
         MediaVariant::Video => paths.video,
         MediaVariant::Poster => paths.poster.or(paths.image),
     }
@@ -192,6 +300,7 @@ pub enum MediaVariant {
     Image,
     Video,
     Poster,
+    Sticker,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -286,6 +395,70 @@ pub fn parse_media(value: &Value, roots: &[PathBuf]) -> MediaPaths {
     paths
 }
 
+/// Finds the sticker's MD5 and CDN address in `wechat-cli context --include-debug` output.
+pub fn parse_sticker(value: &Value, local_id: i64) -> Option<StickerSource> {
+    let message = value
+        .pointer("/data/messages")?
+        .as_array()?
+        .iter()
+        .find(|item| item.pointer("/id/local_id").and_then(Value::as_i64) == Some(local_id))?;
+    message
+        .pointer("/debug/media_read_hints")?
+        .as_array()?
+        .iter()
+        .filter(|hint| hint.get("resource_family").and_then(Value::as_str) == Some("sticker"))
+        .find_map(|hint| {
+            let md5 = hint
+                .get("md5")
+                .and_then(Value::as_str)?
+                .to_ascii_lowercase();
+            let url = hint
+                .pointer("/wechat_cdn/cdn_url")
+                .and_then(Value::as_str)?;
+            let valid_md5 = md5.len() == 32 && md5.bytes().all(|byte| byte.is_ascii_hexdigit());
+            (valid_md5 && is_sticker_url(url)).then(|| StickerSource {
+                md5,
+                url: url.to_string(),
+            })
+        })
+}
+
+/// Only WeChat's own CDN hosts may be contacted for sticker downloads.
+pub fn is_sticker_url(url: &str) -> bool {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return false;
+    };
+    if !matches!(scheme.to_ascii_lowercase().as_str(), "http" | "https") {
+        return false;
+    }
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains('@') {
+        return false;
+    }
+    let host = authority
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    STICKER_HOSTS
+        .iter()
+        .any(|allowed| host == *allowed || host.ends_with(&format!(".{allowed}")))
+}
+
+pub fn sniff_image(bytes: &[u8]) -> Option<&'static str> {
+    if bytes.starts_with(b"GIF8") {
+        Some("gif")
+    } else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
+        Some("png")
+    } else if bytes.starts_with(&[0xff, 0xd8, 0xff]) {
+        Some("jpg")
+    } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some("webp")
+    } else {
+        None
+    }
+}
+
 /// Parses a single `bytes=` range into an inclusive `(start, end)` pair.
 pub fn parse_range(header: &str, len: u64) -> Option<(u64, u64)> {
     if len == 0 {
@@ -351,6 +524,7 @@ pub fn parse_request_path(path: &str) -> Option<MediaRequest> {
         "image" => MediaVariant::Image,
         "video" => MediaVariant::Video,
         "poster" => MediaVariant::Poster,
+        "sticker" => MediaVariant::Sticker,
         _ => return None,
     };
     let account_id = percent_decode(account_id).filter(|value| !value.is_empty())?;
@@ -481,6 +655,10 @@ mod tests {
                 local_id: 3032,
             })
         );
+        assert_eq!(
+            parse_request_path("/sticker/a/b/1").map(|request| request.variant),
+            Some(MediaVariant::Sticker)
+        );
         assert_eq!(parse_request_path("/file/a/b/1"), None);
         assert_eq!(parse_request_path("/image/a/b/x"), None);
         assert_eq!(parse_request_path("/image/a/b"), None);
@@ -503,6 +681,71 @@ mod tests {
         let roots = media_roots(&identity);
         assert_eq!(roots[0], PathBuf::from("/data/xwechat_files"));
         assert!(roots[1].ends_with(".wechat-cli/media-cache"));
+    }
+
+    fn sticker_output(hint: Value) -> Value {
+        json!({ "ok": true, "data": { "messages": [
+            { "id": { "local_id": 1 }, "kind": "text" },
+            { "id": { "local_id": 2859 }, "kind": "sticker", "debug": { "media_read_hints": [hint] } },
+        ] } })
+    }
+
+    #[test]
+    fn parses_sticker_cdn_source() {
+        let value = sticker_output(json!({
+            "resource_family": "sticker",
+            "md5": "0123456789ABCDEF0123456789abcdef",
+            "wechat_cdn": { "cdn_url": "http://vweixinf.tc.qq.com/110/20401/stodownload?m=1", "encrypt_url": "http://x.qq.com/e" },
+        }));
+        assert_eq!(
+            parse_sticker(&value, 2859),
+            Some(StickerSource {
+                md5: "0123456789abcdef0123456789abcdef".into(),
+                url: "http://vweixinf.tc.qq.com/110/20401/stodownload?m=1".into(),
+            })
+        );
+        assert_eq!(parse_sticker(&value, 1), None);
+    }
+
+    #[test]
+    fn rejects_stickers_without_a_safe_source() {
+        let no_url = sticker_output(
+            json!({ "resource_family": "sticker", "md5": "0123456789abcdef0123456789abcdef" }),
+        );
+        assert_eq!(parse_sticker(&no_url, 2859), None);
+        let bad_md5 = sticker_output(json!({
+            "resource_family": "sticker", "md5": "../../etc/passwd",
+            "wechat_cdn": { "cdn_url": "http://vweixinf.tc.qq.com/a" },
+        }));
+        assert_eq!(parse_sticker(&bad_md5, 2859), None);
+        let foreign = sticker_output(json!({
+            "resource_family": "sticker", "md5": "0123456789abcdef0123456789abcdef",
+            "wechat_cdn": { "cdn_url": "http://evil.example.com/a" },
+        }));
+        assert_eq!(parse_sticker(&foreign, 2859), None);
+    }
+
+    #[test]
+    fn only_wechat_cdn_hosts_are_contacted() {
+        assert!(is_sticker_url("http://vweixinf.tc.qq.com/110/a"));
+        assert!(is_sticker_url("https://wxapp.tc.qq.com:443/a"));
+        assert!(is_sticker_url("http://mmbiz.qpic.cn/a"));
+        assert!(!is_sticker_url("http://qq.com.evil.cn/a"));
+        assert!(!is_sticker_url("http://evilqq.com/a"));
+        assert!(!is_sticker_url("http://user@evil.cn/@qq.com"));
+        assert!(!is_sticker_url("file:///etc/passwd"));
+        assert!(!is_sticker_url("vweixinf.tc.qq.com/a"));
+    }
+
+    #[test]
+    fn sniffs_sticker_image_formats() {
+        assert_eq!(sniff_image(b"GIF89a..."), Some("gif"));
+        assert_eq!(sniff_image(b"\x89PNG\r\n\x1a\n...."), Some("png"));
+        assert_eq!(sniff_image(&[0xff, 0xd8, 0xff, 0xe0]), Some("jpg"));
+        assert_eq!(sniff_image(b"RIFF\0\0\0\0WEBPVP8 "), Some("webp"));
+        assert_eq!(sniff_image(b"\x83\x06\x80)+\xc9"), None);
+        assert_eq!(MediaKind::from_message_kind("sticker"), MediaKind::Sticker);
+        assert_eq!(MediaKind::from_message_kind("image"), MediaKind::Media);
     }
 
     #[test]

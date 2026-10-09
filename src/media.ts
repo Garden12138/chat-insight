@@ -1,4 +1,4 @@
-export type MediaVariant = "image" | "video" | "poster";
+export type MediaVariant = "image" | "video" | "poster" | "sticker";
 
 const isWindows = () => typeof navigator !== "undefined" && navigator.userAgent.includes("Windows");
 
@@ -7,4 +7,8 @@ export function mediaUrl(variant: MediaVariant, accountId: string, chatId: strin
   return windows ? `http://chatmedia.localhost/${path}` : `chatmedia://localhost/${path}`;
 }
 
+/** Kinds that open in the full-screen viewer. */
 export const isMediaKind = (kind: string) => kind === "image" || kind === "video";
+
+/** Kinds rendered as media in the timeline instead of text. */
+export const isPreviewKind = (kind: string) => isMediaKind(kind) || kind === "sticker";
