@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import type { AccountSummary, BootstrapResult, DateRange, PlatformCapabilities, RangePreset, SyncProgress, ViewName } from "./types";
+import { BrandMark } from "./components/BrandMark";
 import { DateRangePicker } from "./components/DateRangePicker";
 import { Icon } from "./components/Icons";
 import { LoadingState } from "./components/States";
@@ -10,6 +11,7 @@ import { Overview } from "./views/Overview";
 import { ChatDetail } from "./views/ChatDetail";
 import { DataManagement } from "./views/DataManagement";
 import { errorMessage, rangeForPreset } from "./utils";
+import { version } from "../package.json";
 
 const navItems: Array<{ id: ViewName; label: string; icon: "overview" | "detail" | "data" }> = [
   { id: "overview", label: "总览", icon: "overview" },
@@ -160,7 +162,7 @@ export default function App() {
     setView("detail");
   }
 
-  if (!capabilities) return <div className="app-loading"><div className="brand-mark large"><span /><span /><span /></div><LoadingState label="正在打开本地数据库…" /></div>;
+  if (!capabilities) return <div className="app-loading"><BrandMark size={56} /><LoadingState label="正在打开本地数据库…" /></div>;
   const toastView = toast && <div className={`toast ${toast.tone}`} role="status"><Icon name={toast.tone === "success" ? "check" : "warning"} />{toast.text}</div>;
 
   if (!activeAccount) return <><Onboarding capabilities={capabilities} busy={busy} progress={syncProgress} error={setupError} onBootstrap={bootstrapAndSync} onImport={importData} />{toastView}</>;
@@ -168,13 +170,13 @@ export default function App() {
   return (
     <div className="app-shell">
       <aside className="sidebar">
-        <div className="brand"><div className="brand-mark"><span /><span /><span /></div><div><strong>Chat Insight</strong><small>本地聊天分析</small></div></div>
+        <div className="brand"><BrandMark size={36} /><div><strong>Chat Insight</strong><small>本地聊天分析</small></div></div>
         <nav>
           {navItems.map((item) => <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}><Icon name={item.icon} /><span>{item.label}</span></button>)}
         </nav>
         <div className="sidebar-spacer" />
         <div className="local-badge"><span /><div><strong>仅在本机</strong><small>数据未上传</small></div></div>
-        <p className="version">Chat Insight v0.1.0</p>
+        <p className="version">Chat Insight v{version}</p>
       </aside>
 
       <main className="workspace">

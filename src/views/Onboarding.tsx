@@ -1,4 +1,5 @@
 import type { PlatformCapabilities, SyncProgress } from "../types";
+import { BrandMark } from "../components/BrandMark";
 import { Icon } from "../components/Icons";
 import { InlineNotice } from "../components/States";
 
@@ -18,7 +19,7 @@ export function Onboarding({ capabilities, busy, progress, error, onBootstrap, o
     <main className="onboarding">
       <div className="onboarding-glow" />
       <section className="welcome-card">
-        <div className="brand-mark large"><span /><span /><span /></div>
+        <BrandMark size={60} />
         <p className="eyebrow">LOCAL-FIRST CHAT ANALYTICS</p>
         <h1>把散落在时间里的聊天，<br /><em>重新看见。</em></h1>
         <p className="welcome-copy">
