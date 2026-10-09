@@ -5,6 +5,10 @@ import type { ChatDetailData, ChatListItem, DateRange } from "../types";
 import { Chart } from "../components/Chart";
 import { EmptyState, LoadingState } from "../components/States";
 import { Icon } from "../components/Icons";
+import { Lightbox } from "../components/Lightbox";
+import { MediaBubble } from "../components/MediaBubble";
+import { isMediaKind } from "../media";
+import { chartTheme } from "../theme";
 import { formatCount, formatDateTime, messageKindLabel } from "../utils";
 
 interface ChatDetailProps {
@@ -14,8 +18,7 @@ interface ChatDetailProps {
   requestedChatId?: string;
 }
 
-const axisColor = "#817f78";
-const lineColor = "rgba(111,108,98,.12)";
+const { axis: axisColor, grid: lineColor } = chartTheme;
 
 export function ChatDetail({ accountId, range, revision, requestedChatId }: ChatDetailProps) {
   const [search, setSearch] = useState("");
@@ -25,6 +28,8 @@ export function ChatDetail({ accountId, range, revision, requestedChatId }: Chat
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
+  const [viewerIndex, setViewerIndex] = useState<number>();
+  const mediaMessages = useMemo(() => detail?.messages.filter((message) => isMediaKind(message.kind)) ?? [], [detail]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -41,6 +46,7 @@ export function ChatDetail({ accountId, range, revision, requestedChatId }: Chat
     let active = true;
     setLoading(true);
     setError("");
+    setViewerIndex(undefined);
     api.chatDetail(accountId, selectedId, range, 0, 60)
       .then((value) => active && setDetail(value))
       .catch((reason) => active && setError(String(reason)))
@@ -62,19 +68,19 @@ export function ChatDetail({ accountId, range, revision, requestedChatId }: Chat
   }
 
   const trendOption = useMemo<EChartsOption>(() => ({
-    tooltip: { trigger: "axis" },
+    tooltip: { ...chartTheme.tooltip, trigger: "axis" },
     grid: { top: 12, left: 44, right: 16, bottom: 28 },
     xAxis: { type: "category", data: detail?.dailyTrend.map((item) => item.bucket) ?? [], axisLabel: { color: axisColor, hideOverlap: true }, axisLine: { lineStyle: { color: lineColor } } },
     yAxis: { type: "value", minInterval: 1, axisLabel: { color: axisColor }, splitLine: { lineStyle: { color: lineColor } } },
-    series: [{ type: "bar", data: detail?.dailyTrend.map((item) => item.count) ?? [], barMaxWidth: 18, itemStyle: { color: "#245b57", borderRadius: [4, 4, 0, 0] } }],
+    series: [{ type: "bar", data: detail?.dailyTrend.map((item) => item.count) ?? [], barMaxWidth: 18, itemStyle: { color: chartTheme.barGradient, borderRadius: [6, 6, 0, 0] } }],
   }), [detail]);
 
   const hourOption = useMemo<EChartsOption>(() => ({
-    tooltip: { trigger: "axis" },
+    tooltip: { ...chartTheme.tooltip, trigger: "axis" },
     grid: { top: 12, left: 42, right: 12, bottom: 28 },
     xAxis: { type: "category", data: Array.from({ length: 24 }, (_, hour) => `${hour}`), axisLabel: { color: axisColor, interval: 2 }, axisLine: { lineStyle: { color: lineColor } } },
     yAxis: { type: "value", minInterval: 1, axisLabel: { color: axisColor }, splitLine: { lineStyle: { color: lineColor } } },
-    series: [{ type: "line", data: Array.from({ length: 24 }, (_, hour) => detail?.hourlyActivity.find((item) => item.hour === hour)?.count ?? 0), showSymbol: false, smooth: true, lineStyle: { color: "#fa6c4c", width: 3 }, areaStyle: { color: "rgba(250,108,76,.12)" } }],
+    series: [{ type: "line", data: Array.from({ length: 24 }, (_, hour) => detail?.hourlyActivity.find((item) => item.hour === hour)?.count ?? 0), showSymbol: false, smooth: true, lineStyle: { color: chartTheme.accent, width: 3 }, areaStyle: { color: chartTheme.areaGradient } }],
   }), [detail]);
 
   return (
@@ -120,9 +126,11 @@ export function ChatDetail({ accountId, range, revision, requestedChatId }: Chat
               <div className="panel-heading"><div><p className="eyebrow">MESSAGES</p><h2>消息时间线</h2></div><span className="subtle">已显示 {detail.messages.length} 条</span></div>
               <div className="message-timeline">
                 {detail.messages.map((message) => (
-                  <article key={`${message.localId}-${message.serverId ?? ""}`} className={message.isFromMe ? "mine" : "theirs"}>
+                  <article key={`${message.localId}-${message.serverId ?? ""}`} className={`${message.isFromMe ? "mine" : "theirs"}${isMediaKind(message.kind) ? " has-media" : ""}`}>
                     <div className="message-meta"><strong>{message.isFromMe ? "我" : message.senderName || "对方"}</strong><time>{formatDateTime(message.occurredAt)}</time></div>
-                    <p>{message.text || `[${messageKindLabel[message.kind] ?? message.kind}]`}</p>
+                    {isMediaKind(message.kind)
+                      ? <MediaBubble accountId={accountId} chatId={selectedId} message={message} onOpen={() => setViewerIndex(mediaMessages.indexOf(message))} />
+                      : <p>{message.text || `[${messageKindLabel[message.kind] ?? message.kind}]`}</p>}
                   </article>
                 ))}
               </div>
@@ -131,6 +139,7 @@ export function ChatDetail({ accountId, range, revision, requestedChatId }: Chat
           </>
         )}
       </section>
+      {viewerIndex !== undefined && <Lightbox accountId={accountId} chatId={selectedId} messages={mediaMessages} index={viewerIndex} onIndexChange={setViewerIndex} onClose={() => setViewerIndex(undefined)} />}
     </div>
   );
 }

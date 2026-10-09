@@ -86,6 +86,13 @@ export interface MessageItem {
   text: string;
 }
 
+export interface MediaInfo {
+  image: boolean;
+  video: boolean;
+  poster: boolean;
+  reason?: string;
+}
+
 export interface ChatDetailData {
   chat: ChatListItem;
   totalMessages: number;

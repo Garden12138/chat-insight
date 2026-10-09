@@ -16,7 +16,11 @@ export type IconName =
   | "send"
   | "search"
   | "check"
-  | "warning";
+  | "warning"
+  | "play"
+  | "close"
+  | "chevronLeft"
+  | "image";
 
 const paths: Record<IconName, ReactNode> = {
   overview: <><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
@@ -35,6 +39,10 @@ const paths: Record<IconName, ReactNode> = {
   search: <><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></>,
   check: <path d="m5 12 4 4L19 6"/>,
   warning: <><path d="M12 3 2 21h20z"/><path d="M12 9v5M12 18h.01"/></>,
+  play: <path d="M8 5.5v13a1 1 0 0 0 1.5.86l10.5-6.5a1 1 0 0 0 0-1.72L9.5 4.64A1 1 0 0 0 8 5.5z" fill="currentColor" stroke="none"/>,
+  close: <path d="M6 6l12 12M18 6 6 18"/>,
+  chevronLeft: <path d="m15 18-6-6 6-6"/>,
+  image: <><rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="9" cy="10" r="2"/><path d="m21 16-5-5-9 9"/></>,
 };
 
 export function Icon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement>) {

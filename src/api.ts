@@ -9,6 +9,7 @@ import type {
   DateRange,
   ExportResult,
   ImportResult,
+  MediaInfo,
   PlatformCapabilities,
   SyncProgress,
   SyncResult,
@@ -43,6 +44,8 @@ export const api = {
     call<ChatListItem[]>("list_chats", { accountId, search }),
   chatDetail: (accountId: string, chatId: string, range: DateRange, offset = 0, limit = 60) =>
     call<ChatDetailData>("query_chat_detail", { accountId, chatId, range, offset, limit }),
+  mediaInfo: (accountId: string, chatId: string, localId: number) =>
+    call<MediaInfo>("media_info", { accountId, chatId, localId }),
   importJsonl: (path: string) => call<ImportResult>("import_jsonl", { path }),
   exportJsonl: (accountId: string, path: string) =>
     call<ExportResult>("export_jsonl", { accountId, path }),
