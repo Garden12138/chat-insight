@@ -1,11 +1,13 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import type { AccountSummary, BootstrapResult, DateRange, PlatformCapabilities, RangePreset, SyncProgress, ViewName } from "./types";
 import { BrandMark } from "./components/BrandMark";
 import { DateRangePicker } from "./components/DateRangePicker";
+import { GettingStarted } from "./components/GettingStarted";
 import { Icon } from "./components/Icons";
 import { LoadingState } from "./components/States";
+import { guideCompleted, markGuideCompleted, type GuideMode } from "./guide";
 import { Onboarding } from "./views/Onboarding";
 import { Overview } from "./views/Overview";
 import { ChatDetail } from "./views/ChatDetail";
@@ -46,6 +48,9 @@ export default function App() {
   const [revision, setRevision] = useState(0);
   const [requestedChatId, setRequestedChatId] = useState<string>();
   const [toast, setToast] = useState<{ tone: "success" | "error"; text: string }>();
+  const [guideMode, setGuideMode] = useState<GuideMode | null>(null);
+  const guideReturnView = useRef<ViewName>("overview");
+  const autoGuide = useRef(false);
   const { settings: aiSettings } = useAi();
   const runningAi = useRunningAiKinds().split(",");
   const busyViews: Partial<Record<ViewName, boolean>> = {
@@ -69,6 +74,29 @@ export default function App() {
     setAccountId((current) => preferId ?? (current || values[0]?.id || ""));
     return values;
   }, []);
+
+  const closeGuide = useCallback(() => {
+    setGuideMode((mode) => {
+      if (mode === "tour") {
+        markGuideCompleted();
+        setView(guideReturnView.current);
+      }
+      return null;
+    });
+  }, []);
+
+  function showGuide() {
+    guideReturnView.current = view;
+    setGuideMode("tour");
+  }
+
+  useEffect(() => {
+    if (!activeAccount || autoGuide.current || guideCompleted() || guideMode) return;
+    if (busy || syncProgress?.running) return;
+    autoGuide.current = true;
+    guideReturnView.current = view;
+    setGuideMode("tour");
+  }, [activeAccount, busy, syncProgress?.running, guideMode, view]);
 
   useEffect(() => {
     Promise.all([api.capabilities(), api.accounts()]).then(([platform, values]) => {
@@ -186,8 +214,9 @@ export default function App() {
 
   if (!capabilities) return <div className="app-loading"><BrandMark size={56} /><LoadingState label="正在打开本地数据库…" /></div>;
   const toastView = toast && <div className={`toast ${toast.tone}`} role="status"><Icon name={toast.tone === "success" ? "check" : "warning"} />{toast.text}</div>;
+  const guideView = <GettingStarted open={guideMode !== null} mode={guideMode ?? "tour"} view={view} onView={setView} onClose={closeGuide} />;
 
-  if (!activeAccount) return <><Onboarding capabilities={capabilities} busy={busy} progress={syncProgress} error={setupError} onBootstrap={bootstrapAndSync} onImport={importData} />{toastView}</>;
+  if (!activeAccount) return <><Onboarding capabilities={capabilities} busy={busy} progress={syncProgress} error={setupError} onBootstrap={bootstrapAndSync} onImport={importData} onShowGuide={() => setGuideMode("preview")} />{guideView}{toastView}</>;
 
   return (
     <div className="app-shell">
@@ -195,16 +224,17 @@ export default function App() {
         <div className="brand"><BrandMark size={36} /><div><strong>Chat Insight</strong><small>本地聊天分析</small></div></div>
         <nav>
           {navItems.map((item) => (
-            <button key={item.id} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
+            <button key={item.id} data-guide={`nav-${item.id}`} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
               <Icon name={item.icon} /><span>{item.label}</span>
               {busyViews[item.id] && <i className="nav-activity" title="AI 任务进行中" aria-hidden="true" />}
             </button>
           ))}
         </nav>
         <div className="sidebar-spacer" />
+        <button type="button" className="guide-button" onClick={showGuide}><Icon name="help" /><span>使用指引</span></button>
         {usesCloud(aiSettings)
-          ? <div className="local-badge cloud"><span /><div><strong>已启用云端 AI</strong><small>确认后发送至 {aiSettings.host}</small></div></div>
-          : <div className="local-badge"><span /><div><strong>仅在本机</strong><small>数据未上传</small></div></div>}
+          ? <div className="local-badge cloud" data-guide="privacy"><span /><div><strong>已启用云端 AI</strong><small>确认后发送至 {aiSettings.host}</small></div></div>
+          : <div className="local-badge" data-guide="privacy"><span /><div><strong>仅在本机</strong><small>数据未上传</small></div></div>}
         <p className="version">Chat Insight v{version}</p>
       </aside>
 
@@ -226,6 +256,7 @@ export default function App() {
         {view === "data" && <DataManagement account={activeAccount} capabilities={capabilities} busy={busy} onSync={runSync} onSwitchAccount={switchAccount} onImport={importData} onExport={exportData} onClear={clearData} />}
       </main>
 
+      {guideView}
       {toastView}
     </div>
   );

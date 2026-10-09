@@ -1,3 +1,4 @@
+import { guideTarget } from "../guide";
 import type { DateRange, RangePreset } from "../types";
 
 interface DateRangePickerProps {
@@ -16,7 +17,7 @@ const presets: Array<{ value: RangePreset; label: string }> = [
 
 export function DateRangePicker({ preset, range, onPresetChange, onRangeChange }: DateRangePickerProps) {
   return (
-    <div className="range-picker" aria-label="时间范围">
+    <div className="range-picker" data-guide={guideTarget.range} aria-label="时间范围">
       <div className="segmented">
         {presets.map((item) => (
           <button key={item.value} className={preset === item.value ? "active" : ""} onClick={() => onPresetChange(item.value)}>

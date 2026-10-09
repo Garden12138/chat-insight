@@ -289,7 +289,7 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .empty-state p { max-width: 400px; margin: 0 0 16px; color: var(--muted); font-size: 13px; line-height: 1.7; }
 
 /* Onboarding */
-.onboarding { min-height: 100vh; position: relative; display: grid; place-items: center; overflow: hidden; padding: 50px 20px; background: var(--paper); }
+.onboarding { min-height: 100vh; position: relative; display: grid; place-items: center; overflow: auto; padding: 50px 20px; background: var(--paper); }
 .onboarding::before, .onboarding::after { content: ""; position: absolute; border-radius: 50%; filter: blur(70px); opacity: .55; pointer-events: none; }
 .onboarding::before { width: 520px; height: 520px; top: -140px; right: -100px; background: #ffc2a8; }
 .onboarding::after { width: 460px; height: 460px; bottom: -160px; left: -120px; background: #ffe2b8; }
@@ -303,7 +303,35 @@ button:disabled { opacity: .5; cursor: not-allowed; }
 .privacy-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 22px 0; }
 .privacy-row span { display: flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 999px; color: var(--ink); background: var(--surface-sunken); font-size: 12px; }
 .privacy-row svg { width: 14px; color: var(--coral); }
-.welcome-actions { display: flex; gap: 10px; margin-top: 22px; }
+.welcome-steps { list-style: none; display: grid; gap: 12px; margin: 22px 0 0; padding: 0; }
+.welcome-steps li { display: flex; gap: 12px; align-items: flex-start; }
+.welcome-steps li > span { width: 26px; height: 26px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; color: white; background: var(--gradient); font-size: 12px; font-weight: 700; }
+.welcome-steps strong { display: block; font-size: 14px; }
+.welcome-steps p { margin: 2px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.welcome-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.guide-link { min-height: 40px; display: inline-flex; align-items: center; gap: 6px; padding: 0 8px; border: 0; color: var(--coral-dark); background: transparent; font-size: 13px; font-weight: 600; cursor: pointer; }
+.guide-link svg { width: 16px; }
+.guide-link:hover:not(:disabled) { text-decoration: underline; }
+.guide-link:disabled { opacity: .45; cursor: wait; }
+.guide-button { appearance: none; border: 0; background: transparent; display: flex; align-items: center; gap: 12px; margin-bottom: 4px; padding: 11px 12px; color: var(--muted); border-radius: var(--radius-sm); cursor: pointer; text-align: left; font-size: 14px; }
+.guide-button svg { width: 19px; height: 19px; }
+.guide-button:hover { color: var(--ink); background: rgba(244, 87, 58, .06); }
+.guide-layer { position: fixed; inset: 0; z-index: 40; }
+.guide-catcher { position: absolute; inset: 0; background: rgba(28, 22, 18, .48); }
+.guide-layer.spotlight .guide-catcher { background: transparent; }
+.guide-hole { position: fixed; z-index: 41; border-radius: 16px; box-shadow: 0 0 0 9999px rgba(28, 22, 18, .58); outline: 2px solid #ff9a76; pointer-events: none; }
+.guide-card { position: fixed; z-index: 42; width: min(400px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; padding: 22px 22px 18px; border: 1px solid var(--border); border-radius: 22px; background: var(--surface-solid); box-shadow: var(--shadow-lg); color: var(--ink); }
+.guide-card.centered { top: 50%; left: 50%; width: min(520px, calc(100vw - 48px)); transform: translate(-50%, -50%); }
+.guide-card h2 { margin: 0 0 8px; font-size: 20px; letter-spacing: -.03em; line-height: 1.35; }
+.guide-card > p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.7; }
+.guide-dots { display: flex; gap: 6px; margin-top: 16px; }
+.guide-dots span { width: 6px; height: 6px; border-radius: 999px; background: var(--border); }
+.guide-dots span.active { width: 16px; background: var(--coral); }
+.guide-actions { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.guide-progress { color: var(--faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+.guide-nav { display: flex; gap: 8px; margin-left: auto; }
+.guide-skip { padding: 0; border: 0; color: var(--muted); background: none; font-size: 12px; font-weight: 600; cursor: pointer; }
+.guide-skip:hover { color: var(--ink); }
 .welcome-card .notice { margin-top: 10px; }
 .platform-note { margin: 20px 0 0; color: var(--faint); font-size: 11px; letter-spacing: .04em; }
 .setup-progress { margin-top: 16px; color: var(--muted); font-size: 12px; }

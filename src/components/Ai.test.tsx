@@ -130,6 +130,6 @@ describe("AiSettings", () => {
     fireEvent.click(screen.getByLabelText(/开启 AI 功能/));
     fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
     await waitFor(() => expect(mocks.api.saveAiSettings).toHaveBeenCalledWith(expect.objectContaining({ enabled: true, apiKey: undefined })));
-    expect(await screen.findByRole("button", { name: "建立索引" })).toBeEnabled();
+    await waitFor(() => expect(screen.getByRole("button", { name: "建立索引" })).toBeEnabled());
   });
 });

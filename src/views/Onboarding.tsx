@@ -10,9 +10,10 @@ interface OnboardingProps {
   error?: string;
   onBootstrap: () => void;
   onImport: () => void;
+  onShowGuide: () => void;
 }
 
-export function Onboarding({ capabilities, busy, progress, error, onBootstrap, onImport }: OnboardingProps) {
+export function Onboarding({ capabilities, busy, progress, error, onBootstrap, onImport, onShowGuide }: OnboardingProps) {
   const canConnect = capabilities.directWechatRead && capabilities.bridgeBundled;
 
   return (
@@ -23,7 +24,7 @@ export function Onboarding({ capabilities, busy, progress, error, onBootstrap, o
         <p className="eyebrow">LOCAL-FIRST CHAT ANALYTICS</p>
         <h1>把散落在时间里的聊天，<br /><em>重新看见。</em></h1>
         <p className="welcome-copy">
-          Chat Insight 在你的电脑上读取并分析微信聊天记录。没有云端账号，没有数据上传，也不会发送或修改任何消息。
+          Chat Insight 在你的电脑上读取并分析微信聊天记录。没有要注册的账号，默认也不会上传或修改任何消息。
         </p>
 
         <div className="privacy-row">
@@ -58,6 +59,12 @@ export function Onboarding({ capabilities, busy, progress, error, onBootstrap, o
           </div>
         )}
 
+        <ol className="welcome-steps">
+          <li><span>1</span><div><strong>放入聊天</strong><p>连接本机微信，或导入已经导出的 JSONL。</p></div></li>
+          <li><span>2</span><div><strong>等同步完成</strong><p>内容只写入这台电脑，同步过程中可以取消。</p></div></li>
+          <li><span>3</span><div><strong>跟着页面看一遍</strong><p>进入后会介绍每个功能，也可以现在先看。</p></div></li>
+        </ol>
+
         <div className="welcome-actions">
           {canConnect && (
             <button className="primary-button" onClick={onBootstrap} disabled={busy}>
@@ -66,6 +73,9 @@ export function Onboarding({ capabilities, busy, progress, error, onBootstrap, o
           )}
           <button className={canConnect ? "secondary-button" : "primary-button"} onClick={onImport} disabled={busy}>
             <Icon name="upload" /> 导入 Chat Insight 数据
+          </button>
+          <button type="button" className="guide-link" onClick={onShowGuide} disabled={busy}>
+            <Icon name="help" /> 先看使用指引
           </button>
         </div>
 
