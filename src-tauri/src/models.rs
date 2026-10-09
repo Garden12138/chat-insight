@@ -111,6 +111,15 @@ pub struct MessageItem {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct MediaInfo {
+    pub image: bool,
+    pub video: bool,
+    pub poster: bool,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ChatDetailData {
     pub chat: ChatListItem,
     pub total_messages: i64,

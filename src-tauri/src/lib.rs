@@ -2,14 +2,16 @@ mod analysis;
 mod bridge;
 mod database;
 mod error;
+mod media;
 mod models;
 mod portable;
 mod wechat_account;
 
 use database::Database;
+use media::MediaResolver;
 use models::{
     AccountSummary, BootstrapResult, ChatDetailData, ChatListItem, DashboardData, DateRange,
-    ExportResult, ImportResult, PlatformCapabilities, SyncResult,
+    ExportResult, ImportResult, MediaInfo, PlatformCapabilities, SyncResult,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -158,6 +160,22 @@ fn query_chat_detail(
 }
 
 #[tauri::command]
+async fn media_info(
+    app: AppHandle,
+    resolver: State<'_, MediaResolver>,
+    account_id: String,
+    chat_id: String,
+    local_id: i64,
+) -> Result<MediaInfo, String> {
+    let resolver = resolver.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        resolver.info(&app, &account_id, &chat_id, local_id)
+    })
+    .await
+    .map_err(|_| "媒体读取任务意外结束".to_string())
+}
+
+#[tauri::command]
 async fn import_jsonl(state: State<'_, AppState>, path: PathBuf) -> Result<ImportResult, String> {
     let database = state.database.clone();
     tauri::async_runtime::spawn_blocking(move || portable::import_jsonl(&database, &path))
@@ -193,6 +211,12 @@ fn clear_account(state: State<'_, AppState>, account_id: String) -> Result<(), S
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .register_asynchronous_uri_scheme_protocol("chatmedia", |ctx, request, responder| {
+            let app = ctx.app_handle().clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                responder.respond(media::respond(&app, &request));
+            });
+        })
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
             let database = Database::new(app_data.join("chat-insight.db"));
@@ -203,6 +227,7 @@ pub fn run() {
             let _ = wechat_account::adopt_legacy_dataset(&database);
             let account_store = AccountStore::new(app_data.join("wechat-accounts"));
             app.manage(AppState::new(database, account_store));
+            app.manage(MediaResolver::default());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -215,6 +240,7 @@ pub fn run() {
             query_dashboard,
             list_chats,
             query_chat_detail,
+            media_info,
             import_jsonl,
             export_jsonl,
             clear_account,

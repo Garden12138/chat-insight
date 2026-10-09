@@ -701,7 +701,7 @@ fn run_status(
     Ok(())
 }
 
-fn run_json(paths: &BridgePaths, args: &[&str]) -> AppResult<Value> {
+pub fn run_json(paths: &BridgePaths, args: &[&str]) -> AppResult<Value> {
     let output = Command::new(&paths.cli)
         .current_dir(&paths.directory)
         .args(args)

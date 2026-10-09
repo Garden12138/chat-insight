@@ -81,6 +81,13 @@ pub fn identity_from_config_bytes(bytes: &[u8]) -> Option<AccountIdentity> {
         .and_then(|value| identity_from_config(&value))
 }
 
+/// The account the bridge will read, according to its config file.
+pub fn current_bridge_identity() -> AppResult<Option<AccountIdentity>> {
+    Ok(read_optional(&bridge_config_path()?)?
+        .as_deref()
+        .and_then(identity_from_config_bytes))
+}
+
 /// Reads the account from `wechat-cli status --include-debug`.
 pub fn identity_from_status(value: &Value) -> Option<AccountIdentity> {
     let account = value.pointer("/data/status/account_debug")?;

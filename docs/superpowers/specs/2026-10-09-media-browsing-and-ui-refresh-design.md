@@ -27,32 +27,30 @@
 
 ## 一、数据层（Rust）
 
-### 数据库
-- `messages` 表新增 `media_ref TEXT`，`PRAGMA user_version` 升到 2。
-- 迁移幂等：先检查列是否存在，再执行 `ALTER TABLE`；旧数据保持不变，`media_ref` 为 NULL。
-- `media_ref` 只存桥返回的媒体线索（文件名、MD5、相对路径），不存绝对路径，不存媒体内容。
-- `NormalizedMessage` 与 `MessageItem` 增加 `media_ref: Option<String>`，`MessageItem` 另增 `has_media: bool`。
-
-### 同步
-- `bridge.rs::normalize_message` 增加对媒体线索字段的提取。字段名以摸底结果为准，不凭猜测。
-- 导入 JSONL 的消息没有媒体线索，`media_ref` 为 NULL。
+### 摸底结论（2026-10-09，修订本节）
+- 内置数据桥 `wechat-cli v1.6.20` 已提供 `media <chat> --local-id N`，返回 JSON：
+  `data.media[0].images[].path`（已解码的 `.jpg`，位于 `~/.wechat-cli/media-cache/<wxid>/`）、
+  `data.media[0].resources[]`（`type` 为 `image`/`video`，`path` 为绝对路径，视频为 `.mp4`，
+  未下载的视频只有 `<md5>_thumb.jpg` 封面）。单次调用约 80 ms。
+- 现有同步调用的 `timeline` 默认已会把图片解码到同一缓存目录，因此按需调用 `media` 不改变隐私边界。
+- 结论：不改数据库、不自写 `.dat` 解码、不另建缩略图缓存。用 `chat_id + local_id` 按需向数据桥查询即可。
 
 ### `media.rs`（新模块）
-- `resolve(account, chat, local_id) -> MediaLocation`：在微信数据根目录内定位原文件，只读。解析后的路径必须位于微信数据根目录内，否则拒绝，防止路径穿越。
-- `decode_image(path) -> Vec<u8>`：解码 `.dat` 为标准图片字节。支持范围由摸底结果决定。
-- 缩略图缓存目录：`<app_data>/media-cache/<account>/`；提供清理函数。
-- 错误分类：`Missing`（文件已被微信清理）、`Unsupported`（暂不支持的格式）、`Denied`（路径越界）。
+- `parse_media(value) -> MediaPaths { image, video, poster }`：从 `media` 输出中按类型和扩展名分类路径。
+- `MediaResolver`：调用数据桥并以 `(account_id, chat_id, local_id)` 为键缓存解析结果（进程内）。
+- 账号校验：读取数据桥配置算出当前账号 ID，与请求的数据集 ID 不一致时拒绝（导入的数据集或其他账号没有媒体）。
+- 路径白名单：文件必须存在、扩展名属于图片/视频白名单，且规范化后位于 `xwechat_files` 目录或 `~/.wechat-cli/media-cache` 内。
+- 错误以中文原因返回：不是当前连接的账号、媒体已不在本机、不支持的类型。
 
 ### Tauri 命令与协议
-- `get_media_thumb(account_id, chat_id, local_id)`：返回缩略图。
-- `get_media_url(account_id, chat_id, local_id)`：返回可播放地址。
-- 自定义协议 `chatmedia://`：流式提供视频，支持 HTTP Range，使 `<video>` 可拖动进度。
-- `clear_media_cache(account_id)`：清理缩略图缓存。
-- `tauri.conf.json` 的 CSP 为 `img-src` 与 `media-src` 加入该协议。
+- 命令 `media_info(account_id, chat_id, local_id) -> MediaInfo { image, video, poster, reason }`。
+- 自定义协议 `chatmedia`：`chatmedia://localhost/<variant>/<account>/<chat>/<local_id>`（Windows 为
+  `http://chatmedia.localhost/...`），`variant` 为 `image`/`video`/`poster`；支持 HTTP Range，使 `<video>` 可拖动。
+- `tauri.conf.json` 的 CSP 为 `img-src` 与新增的 `media-src` 加入该协议。
 
 ### 隐私
 - 日志不记录媒体路径、文件名或哈希。
-- 应用只读微信目录，只写自己的数据目录。
+- 应用只读微信目录与数据桥缓存，只写自己的数据目录；网页只能按消息身份请求媒体，无法读取任意路径。
 
 ## 二、前端：媒体预览
 
@@ -77,19 +75,19 @@
 
 ## 五、测试与验证
 
-- Rust 单测：路径穿越被拒绝；`.dat` 解码使用自造小样本；迁移幂等；文件缺失返回 `Missing`。
+- Rust 单测：`media` 输出解析（图片、已下载视频、仅封面视频）；白名单外路径被拒绝；Range 解析。
 - 前端测试：`MediaBubble` 的加载、成功、缺失三种状态；`Lightbox` 的键盘操作。
 - 验证命令：`npm run lint`、`npm test`、`cargo test --manifest-path src-tauri/Cargo.toml`。
 - 手动验证：用真实微信数据检查图片、视频、缺失占位与深浅色模式。
 
 ## 六、实施顺序
 
-1. 摸底：用真实数据桥输出确认媒体字段与 `.dat` 格式。
-2. 数据层与 `media.rs`。
+1. 摸底（已完成，结论见第一节）。
+2. `media.rs`、命令与协议。
 3. 前端媒体组件。
 4. 全页面视觉焕新与图标。
 
 ## 风险与回退
 
-- 主要风险是桥没有返回任何媒体线索。此时暂停并与用户商量，备选是直接扫描微信目录再按时间匹配消息。
-- `.dat` 加密格式随微信版本变化。无法解码的格式一律走 `Unsupported` 占位，不影响其他功能。
+- 图片密钥失效时数据桥会自动运行 `wxkey image-key` 刷新，仍失败则返回无路径，界面显示占位。
+- WebKit 对自定义协议的视频播放依赖正确的 Range 响应；若个别格式无法播放，占位提示“在微信中打开”。
