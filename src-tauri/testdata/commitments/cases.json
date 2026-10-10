@@ -1,0 +1,99 @@
+[
+  {
+    "name": "我答应发合同",
+    "chatKind": "direct",
+    "chatName": "小艾",
+    "messages": [
+      { "at": "2026-10-12T09:00:00+08:00", "me": false, "text": "合同你那边改完了吗？" },
+      { "at": "2026-10-12T09:02:00+08:00", "me": true, "text": "还差一点，周五前我把终版发你" },
+      { "at": "2026-10-12T09:03:00+08:00", "me": false, "text": "好的，辛苦" }
+    ],
+    "expected": [{ "line": 2, "direction": "mine" }]
+  },
+  {
+    "name": "对方答应转账",
+    "chatKind": "direct",
+    "chatName": "阿杰",
+    "messages": [
+      { "at": "2026-10-08T21:10:00+08:00", "me": false, "text": "上次聚餐的钱我明天转你哈" },
+      { "at": "2026-10-08T21:11:00+08:00", "me": true, "text": "不急不急" }
+    ],
+    "expected": [{ "line": 1, "direction": "theirs" }]
+  },
+  {
+    "name": "客套话不算",
+    "chatKind": "direct",
+    "chatName": "老同学",
+    "messages": [
+      { "at": "2026-10-05T12:00:00+08:00", "me": false, "text": "好久不见啊" },
+      { "at": "2026-10-05T12:01:00+08:00", "me": true, "text": "是啊，改天一起吃个饭" },
+      { "at": "2026-10-05T12:02:00+08:00", "me": false, "text": "好呀好呀" }
+    ],
+    "expected": []
+  },
+  {
+    "name": "当场完成不算",
+    "chatKind": "direct",
+    "chatName": "同事小林",
+    "messages": [
+      { "at": "2026-10-09T15:30:00+08:00", "me": false, "text": "能把那个文档链接发我一下吗" },
+      { "at": "2026-10-09T15:31:00+08:00", "me": true, "text": "https://example.com/doc 发你了" },
+      { "at": "2026-10-09T15:32:00+08:00", "me": false, "text": "收到谢谢" }
+    ],
+    "expected": []
+  },
+  {
+    "name": "群聊里我认领任务",
+    "chatKind": "group",
+    "chatName": "项目群",
+    "messages": [
+      { "at": "2026-10-10T10:00:00+08:00", "me": false, "sender": "张三", "text": "下周一的评审材料谁来准备？" },
+      { "at": "2026-10-10T10:02:00+08:00", "me": true, "text": "我来准备，周日晚上发群里" },
+      { "at": "2026-10-10T10:03:00+08:00", "me": false, "sender": "李四", "text": "那我负责订会议室" }
+    ],
+    "expected": [{ "line": 2, "direction": "mine" }]
+  },
+  {
+    "name": "后来完成的约定",
+    "chatKind": "direct",
+    "chatName": "老王",
+    "messages": [
+      { "at": "2026-10-06T20:00:00+08:00", "me": true, "text": "这周末我帮你看看简历" },
+      { "at": "2026-10-06T20:01:00+08:00", "me": false, "text": "太好了，谢谢！" },
+      { "at": "2026-10-11T16:00:00+08:00", "me": true, "text": "简历看完了，改了几处，发你邮箱了" },
+      { "at": "2026-10-11T16:05:00+08:00", "me": false, "text": "收到！" }
+    ],
+    "expected": [{ "line": 1, "direction": "mine" }]
+  },
+  {
+    "name": "对方答应寄回",
+    "chatKind": "direct",
+    "chatName": "小周",
+    "messages": [
+      { "at": "2026-10-07T19:00:00+08:00", "me": true, "text": "我的书你什么时候寄回来？" },
+      { "at": "2026-10-07T19:05:00+08:00", "me": false, "text": "这周五之前一定寄出" }
+    ],
+    "expected": [{ "line": 2, "direction": "theirs" }]
+  },
+  {
+    "name": "群聊里别人答应我",
+    "chatKind": "group",
+    "chatName": "家族群",
+    "messages": [
+      { "at": "2026-10-09T18:00:00+08:00", "me": true, "text": "妈，这周末回家吃饭吗？" },
+      { "at": "2026-10-09T18:04:00+08:00", "me": false, "sender": "妈妈", "text": "回，周六我给你带腊肉" },
+      { "at": "2026-10-09T18:05:00+08:00", "me": false, "sender": "爸爸", "text": "我去买菜" }
+    ],
+    "expected": [{ "line": 2, "direction": "theirs" }]
+  },
+  {
+    "name": "提问不算",
+    "chatKind": "direct",
+    "chatName": "小美",
+    "messages": [
+      { "at": "2026-10-11T22:00:00+08:00", "me": false, "text": "你明天要不要去看展？" },
+      { "at": "2026-10-11T22:03:00+08:00", "me": true, "text": "看情况吧，明天再说" }
+    ],
+    "expected": []
+  }
+]

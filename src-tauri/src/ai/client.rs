@@ -29,11 +29,25 @@ impl ChatMessage {
 
 pub trait LlmClient: Send + Sync {
     /// Streams the reply through `on_delta`; returning `false` from it cancels the request.
+    /// `on_delta` is also called with an empty string while the model produces hidden
+    /// reasoning, so cancellation still works then.
     fn chat(
         &self,
         messages: &[ChatMessage],
         on_delta: &mut dyn FnMut(&str) -> bool,
     ) -> AppResult<String>;
+
+    /// Like `chat`, but asks the service to stop after `max_tokens` generated tokens,
+    /// reasoning included, so a runaway reply cannot stall batch work.
+    fn chat_limited(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+        on_delta: &mut dyn FnMut(&str) -> bool,
+    ) -> AppResult<String> {
+        let _ = max_tokens;
+        self.chat(messages, on_delta)
+    }
 
     /// Returns one L2-normalized vector per input, in input order.
     fn embed(&self, inputs: &[String]) -> AppResult<Vec<Vec<f32>>>;
@@ -144,21 +158,23 @@ impl OpenAiCompatClient {
     }
 }
 
-impl LlmClient for OpenAiCompatClient {
-    fn chat(
+impl OpenAiCompatClient {
+    fn complete(
         &self,
         messages: &[ChatMessage],
+        max_tokens: Option<u32>,
         on_delta: &mut dyn FnMut(&str) -> bool,
     ) -> AppResult<String> {
-        let response = self.post(
-            "/chat/completions",
-            &json!({
-                "model": self.chat_model,
-                "messages": messages,
-                "stream": true,
-                "temperature": 0.3,
-            }),
-        )?;
+        let mut body = json!({
+            "model": self.chat_model,
+            "messages": messages,
+            "stream": true,
+            "temperature": 0.3,
+        });
+        if let Some(limit) = max_tokens {
+            body["max_tokens"] = json!(limit);
+        }
+        let response = self.post("/chat/completions", &body)?;
         let is_event_stream = response
             .header("Content-Type")
             .is_some_and(|value| value.contains("text/event-stream"));
@@ -194,16 +210,11 @@ impl LlmClient for OpenAiCompatClient {
             if let Some(message) = value.pointer("/error/message").and_then(Value::as_str) {
                 return Err(AppError::Ai(format!("模型服务返回错误：{message}")));
             }
-            let Some(delta) = value
+            let delta = value
                 .pointer("/choices/0/delta/content")
                 .and_then(Value::as_str)
-            else {
-                continue;
-            };
+                .unwrap_or_default();
             let visible = filter.push(delta);
-            if visible.is_empty() {
-                continue;
-            }
             output.push_str(&visible);
             if !on_delta(&visible) {
                 return Err(cancelled());
@@ -215,6 +226,25 @@ impl LlmClient for OpenAiCompatClient {
             on_delta(&rest);
         }
         Ok(output.trim().to_string())
+    }
+}
+
+impl LlmClient for OpenAiCompatClient {
+    fn chat(
+        &self,
+        messages: &[ChatMessage],
+        on_delta: &mut dyn FnMut(&str) -> bool,
+    ) -> AppResult<String> {
+        self.complete(messages, None, on_delta)
+    }
+
+    fn chat_limited(
+        &self,
+        messages: &[ChatMessage],
+        max_tokens: u32,
+        on_delta: &mut dyn FnMut(&str) -> bool,
+    ) -> AppResult<String> {
+        self.complete(messages, Some(max_tokens), on_delta)
     }
 
     fn embed(&self, inputs: &[String]) -> AppResult<Vec<Vec<f32>>> {
@@ -461,6 +491,32 @@ mod tests {
         assert_eq!(body["model"], "qwen3:8b");
         assert_eq!(body["stream"], true);
         assert_eq!(body["messages"][0]["content"], "打个招呼");
+    }
+
+    #[test]
+    fn limits_tokens_and_can_stop_during_hidden_reasoning() {
+        let events = [
+            r#"{"choices":[{"delta":{"reasoning":"先想想"}}]}"#,
+            r#"{"choices":[{"delta":{"reasoning":"再想想"}}]}"#,
+            r#"{"choices":[{"delta":{"content":"答案"}}]}"#,
+        ]
+        .iter()
+        .map(|event| format!("data: {event}\n\n"))
+        .collect::<String>();
+        let (url, request) = serve_once(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n{events}"
+        ));
+        let mut calls = 0;
+        let error = client(url)
+            .chat_limited(&[ChatMessage::user("问")], 512, &mut |delta| {
+                calls += 1;
+                assert!(delta.is_empty());
+                calls < 2
+            })
+            .unwrap_err();
+        assert_eq!(error.to_string(), cancelled().to_string());
+        let body: Value = serde_json::from_str(&request.recv().unwrap()).unwrap();
+        assert_eq!(body["max_tokens"], 512);
     }
 
     #[test]

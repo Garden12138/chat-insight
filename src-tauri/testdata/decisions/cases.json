@@ -1,0 +1,83 @@
+[
+  {
+    "name": "拍板了截止日期",
+    "chatKind": "group",
+    "chatName": "项目群",
+    "messages": [
+      { "at": "2026-10-12T10:00:00+08:00", "me": false, "sender": "小艾", "text": "设计稿什么时候能定？" },
+      { "at": "2026-10-12T10:02:00+08:00", "me": true, "text": "就这么定，周五前完成" }
+    ],
+    "expected": [{ "line": 2, "kind": "decision" }]
+  },
+  {
+    "name": "明确的待定事项",
+    "chatKind": "group",
+    "chatName": "旅行群",
+    "messages": [
+      { "at": "2026-10-08T20:00:00+08:00", "me": false, "sender": "阿杰", "text": "酒店还没定，明天再议" },
+      { "at": "2026-10-08T20:01:00+08:00", "me": true, "text": "行，那先不定" }
+    ],
+    "expected": [{ "line": 1, "kind": "question" }]
+  },
+  {
+    "name": "个人看法不算决定",
+    "chatKind": "group",
+    "chatName": "讨论群",
+    "messages": [
+      { "at": "2026-10-09T11:00:00+08:00", "me": false, "sender": "小林", "text": "我觉得方案 A 好看一点" },
+      { "at": "2026-10-09T11:02:00+08:00", "me": true, "text": "我也还在看" }
+    ],
+    "expected": []
+  },
+  {
+    "name": "指定负责人",
+    "chatKind": "group",
+    "chatName": "家人群",
+    "messages": [
+      { "at": "2026-10-10T18:00:00+08:00", "me": false, "sender": "妈妈", "text": "年夜饭谁负责订位？" },
+      { "at": "2026-10-10T18:04:00+08:00", "me": true, "text": "我来订，就定在周六晚上" }
+    ],
+    "expected": [{ "line": 2, "kind": "decision" }]
+  },
+  {
+    "name": "后来推翻",
+    "chatKind": "group",
+    "chatName": "排期群",
+    "messages": [
+      { "at": "2026-10-06T09:00:00+08:00", "me": true, "text": "评审就定在周三" },
+      { "at": "2026-10-06T09:01:00+08:00", "me": false, "sender": "产品", "text": "好" },
+      { "at": "2026-10-07T15:00:00+08:00", "me": false, "sender": "产品", "text": "周三来不及，改到下周一" }
+    ],
+    "expected": [{ "line": 1, "kind": "decision" }]
+  },
+  {
+    "name": "只是提问",
+    "chatKind": "group",
+    "chatName": "闲聊群",
+    "messages": [
+      { "at": "2026-10-11T12:00:00+08:00", "me": false, "sender": "同事", "text": "明天中午吃什么？" },
+      { "at": "2026-10-11T12:03:00+08:00", "me": true, "text": "还没想好" }
+    ],
+    "expected": []
+  },
+  {
+    "name": "同意一个具体安排",
+    "chatKind": "group",
+    "chatName": "活动群",
+    "messages": [
+      { "at": "2026-10-04T19:00:00+08:00", "me": false, "sender": "班长", "text": "班会改到周五下午四点，大家没问题吧" },
+      { "at": "2026-10-04T19:05:00+08:00", "me": true, "text": "同意" }
+    ],
+    "expected": [{ "line": 1, "kind": "decision" }]
+  },
+  {
+    "name": "取消原来的安排",
+    "chatKind": "group",
+    "chatName": "出游群",
+    "messages": [
+      { "at": "2026-10-03T10:00:00+08:00", "me": true, "text": "那这周末的露营先取消吧" },
+      { "at": "2026-10-03T10:02:00+08:00", "me": false, "sender": "小周", "text": "好，下次再说" }
+    ],
+    "expected": [{ "line": 1, "kind": "decision" }]
+  }
+]

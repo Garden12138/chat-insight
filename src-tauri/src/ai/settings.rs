@@ -14,6 +14,9 @@ pub struct AiSettings {
     pub chat_model: String,
     pub embed_model: String,
     pub allow_cloud: bool,
+    /// Scan new messages for commitments after each sync. Only honoured for local models,
+    /// because cloud requests need the user's consent every time.
+    pub auto_scan_commitments: bool,
 }
 
 impl Default for AiSettings {
@@ -24,6 +27,7 @@ impl Default for AiSettings {
             chat_model: "qwen3:8b".into(),
             embed_model: "bge-m3".into(),
             allow_cloud: false,
+            auto_scan_commitments: false,
         }
     }
 }
@@ -134,6 +138,7 @@ impl SettingsStore {
         if settings.chat_model.is_empty() || settings.embed_model.is_empty() {
             return Err(AppError::Validation("请填写对话模型和向量模型".into()));
         }
+        settings.auto_scan_commitments &= settings.is_local();
         write_private_file(
             &self.settings_path(),
             serde_json::to_string_pretty(&settings)?.as_bytes(),
@@ -217,6 +222,7 @@ mod tests {
         let settings = AiSettings {
             enabled: true,
             base_url: "https://api.example.com/v1/".into(),
+            auto_scan_commitments: true,
             ..AiSettings::default()
         };
         let view = store
@@ -227,6 +233,23 @@ mod tests {
             .unwrap();
         assert_eq!(view.settings.base_url, "https://api.example.com/v1");
         assert!(view.has_api_key && !view.is_local);
+        assert!(!view.settings.auto_scan_commitments);
+        let local = store
+            .save(AiSettingsInput {
+                settings: AiSettings {
+                    auto_scan_commitments: true,
+                    ..AiSettings::default()
+                },
+                api_key: None,
+            })
+            .unwrap();
+        assert!(local.settings.auto_scan_commitments);
+        store
+            .save(AiSettingsInput {
+                settings: view.settings.clone(),
+                api_key: None,
+            })
+            .unwrap();
         assert_eq!(view.host, "api.example.com");
         assert_eq!(store.api_key().as_deref(), Some("sk-test"));
 

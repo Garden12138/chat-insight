@@ -1,4 +1,6 @@
 use super::client::LlmClient;
+use super::commitments::{self, ScanEstimate, ScanOutcome};
+use super::decisions;
 use super::features::{self, AskResult, ReportResult, SummaryResult, TopicsResult};
 use super::indexer::{self, IndexOutcome, IndexProgress};
 use super::settings::{AiSettingsInput, AiSettingsView};
@@ -33,18 +35,22 @@ fn cache_mode(mode: &str) -> AppResult<(bool, bool)> {
     }
 }
 
-/// Holds the index lock for the lifetime of the guard.
-struct IndexLock(Arc<AtomicBool>);
+/// Holds a task lock for the lifetime of the guard.
+struct TaskLock(Arc<AtomicBool>);
 
-impl IndexLock {
-    fn acquire(flag: &Arc<AtomicBool>) -> AppResult<Self> {
+impl TaskLock {
+    fn acquire(flag: &Arc<AtomicBool>, busy: &str) -> AppResult<Self> {
         flag.compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .map_err(|_| AppError::Ai("语义索引正在建立，请稍后再试".into()))?;
+            .map_err(|_| AppError::Ai(busy.into()))?;
         Ok(Self(Arc::clone(flag)))
+    }
+
+    fn index(flag: &Arc<AtomicBool>) -> AppResult<Self> {
+        Self::acquire(flag, "语义索引正在建立，请稍后再试")
     }
 }
 
-impl Drop for IndexLock {
+impl Drop for TaskLock {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
     }
@@ -171,7 +177,7 @@ pub async fn ai_build_index(
     settings
         .ensure_allowed(true, cloud_consent)
         .map_err(public_error)?;
-    let lock = IndexLock::acquire(&ai.index_running).map_err(public_error)?;
+    let lock = TaskLock::index(&ai.index_running).map_err(public_error)?;
     ai.index_cancel.store(false, Ordering::SeqCst);
     let cancel = Arc::clone(&ai.index_cancel);
     let database = state.database.clone();
@@ -405,7 +411,7 @@ pub async fn ai_chat_topics(
     settings
         .ensure_allowed(true, cloud_consent)
         .map_err(public_error)?;
-    let lock = IndexLock::acquire(&ai.index_running).map_err(public_error)?;
+    let lock = TaskLock::index(&ai.index_running).map_err(public_error)?;
     let sink = ai.stream(&app, &request_id);
     let database = state.database.clone();
     let (task_account, task_chat, task_range) =
@@ -522,6 +528,106 @@ pub async fn ai_year_report(
     .await?;
     result.generated_at = Some(store(&state, &key, &fingerprint, &result).map_err(public_error)?);
     Ok(Some(result))
+}
+
+#[tauri::command]
+pub async fn ai_commitment_estimate(
+    state: State<'_, AppState>,
+    account_id: String,
+    range: DateRange,
+    chat_id: Option<String>,
+) -> Result<ScanEstimate, String> {
+    let database = state.database.clone();
+    blocking(move || {
+        let plans = commitments::plan_scan(&database, &account_id, chat_id.as_deref(), &range)?;
+        Ok(commitments::estimate(&plans))
+    })
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn ai_scan_commitments(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ai: State<'_, AiState>,
+    account_id: String,
+    range: DateRange,
+    chat_id: Option<String>,
+    request_id: String,
+    cloud_consent: bool,
+) -> Result<ScanOutcome, String> {
+    let (settings, client) = ai.client();
+    settings
+        .ensure_allowed(true, cloud_consent)
+        .map_err(public_error)?;
+    let lock =
+        TaskLock::acquire(&ai.scan_running, "正在扫描，请等这次扫描结束").map_err(public_error)?;
+    let sink = ai.stream(&app, &request_id);
+    let database = state.database.clone();
+    blocking(move || {
+        let _lock = lock;
+        commitments::scan_commitments(
+            &database,
+            &client,
+            &sink,
+            &account_id,
+            chat_id.as_deref(),
+            &range,
+            &settings.chat_model,
+        )
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn ai_decision_estimate(
+    state: State<'_, AppState>,
+    account_id: String,
+    chat_id: String,
+    range: DateRange,
+) -> Result<ScanEstimate, String> {
+    let database = state.database.clone();
+    blocking(move || {
+        let plans = decisions::plan_scan(&database, &account_id, &chat_id, &range)?;
+        Ok(decisions::estimate(&plans))
+    })
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn ai_scan_decisions(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ai: State<'_, AiState>,
+    account_id: String,
+    chat_id: String,
+    range: DateRange,
+    request_id: String,
+    cloud_consent: bool,
+) -> Result<ScanOutcome, String> {
+    let (settings, client) = ai.client();
+    settings
+        .ensure_allowed(true, cloud_consent)
+        .map_err(public_error)?;
+    let lock =
+        TaskLock::acquire(&ai.scan_running, "正在扫描，请等这次扫描结束").map_err(public_error)?;
+    let sink = ai.stream(&app, &request_id);
+    let database = state.database.clone();
+    blocking(move || {
+        let _lock = lock;
+        decisions::scan_decisions(
+            &database,
+            &client,
+            &sink,
+            &account_id,
+            &chat_id,
+            &range,
+            &settings.chat_model,
+        )
+    })
+    .await
 }
 
 #[cfg(test)]

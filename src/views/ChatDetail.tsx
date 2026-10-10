@@ -8,6 +8,7 @@ import { Icon } from "../components/Icons";
 import { Lightbox } from "../components/Lightbox";
 import { MediaBubble } from "../components/MediaBubble";
 import { AiSummaryPanel } from "../components/AiSummaryPanel";
+import { ChatMemoryPanel } from "../components/ChatMemoryPanel";
 import { TopicsPanel } from "../components/TopicsPanel";
 import { isMediaKind, isPreviewKind } from "../media";
 import { withEmoji } from "../emoji";
@@ -19,11 +20,12 @@ interface ChatDetailProps {
   range: DateRange;
   revision: number;
   requestedChatId?: string;
+  onOpenCommitments: () => void;
 }
 
 const { axis: axisColor, grid: lineColor } = chartTheme;
 
-export function ChatDetail({ accountId, range, revision, requestedChatId }: ChatDetailProps) {
+export function ChatDetail({ accountId, range, revision, requestedChatId, onOpenCommitments }: ChatDetailProps) {
   const [search, setSearch] = useState("");
   const [chats, setChats] = useState<ChatListItem[]>([]);
   const [selectedId, setSelectedId] = useState(requestedChatId ?? "");
@@ -113,6 +115,7 @@ export function ChatDetail({ accountId, range, revision, requestedChatId }: Chat
             </header>
 
             <AiSummaryPanel accountId={accountId} chatId={detail.chat.id} chatName={detail.chat.displayName} range={range} revision={revision} />
+            <ChatMemoryPanel accountId={accountId} chatId={detail.chat.id} chatName={detail.chat.displayName} chatKind={detail.chat.chatKind} range={range} revision={revision} onOpenDetail={() => undefined} onOpenCommitments={onOpenCommitments} />
 
             <div className="detail-charts">
               <section className="panel"><div className="panel-heading"><div><p className="eyebrow">TIMELINE</p><h2>聊天趋势</h2></div></div><Chart option={trendOption} height={240} ariaLabel="当前聊天消息趋势" /></section>

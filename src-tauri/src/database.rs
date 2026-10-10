@@ -66,6 +66,90 @@ CREATE TABLE IF NOT EXISTS ai_cache (
 );
 "#;
 
+/// Commitments found in chats. Unlike `ai_cache`, rows belong to the user: the AI only
+/// adds suggestions and writes the `ai_*` columns of existing rows.
+const SCHEMA_V3: &str = r#"
+CREATE TABLE IF NOT EXISTS commitments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    direction TEXT NOT NULL,
+    owner_name TEXT NOT NULL,
+    title TEXT NOT NULL,
+    quote TEXT NOT NULL,
+    due_text TEXT,
+    due_date TEXT,
+    status TEXT NOT NULL DEFAULT 'suggested',
+    ai_status TEXT,
+    ai_note TEXT,
+    followup_local_id INTEGER,
+    source_local_id INTEGER NOT NULL,
+    source_end_local_id INTEGER NOT NULL,
+    source_at TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    model TEXT NOT NULL,
+    user_edited INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (account_id, chat_id, source_local_id, direction),
+    FOREIGN KEY (account_id, chat_id) REFERENCES chats(account_id, chat_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(account_id, status, due_date);
+CREATE TABLE IF NOT EXISTS commitment_scans (
+    account_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    from_local_id INTEGER NOT NULL,
+    to_local_id INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    scanned_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, chat_id, from_local_id),
+    FOREIGN KEY (account_id, chat_id) REFERENCES chats(account_id, chat_id) ON DELETE CASCADE
+);
+"#;
+
+/// Scanned intervals become per extractor `kind`, and group decisions get their own table.
+const SCHEMA_V4: &str = r#"
+CREATE TABLE IF NOT EXISTS memory_scans (
+    account_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    from_local_id INTEGER NOT NULL,
+    to_local_id INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    scanned_at TEXT NOT NULL,
+    PRIMARY KEY (account_id, chat_id, kind, from_local_id),
+    FOREIGN KEY (account_id, chat_id) REFERENCES chats(account_id, chat_id) ON DELETE CASCADE
+);
+INSERT OR IGNORE INTO memory_scans(account_id, chat_id, kind, from_local_id, to_local_id, model, scanned_at)
+    SELECT account_id, chat_id, 'commitment', from_local_id, to_local_id, model, scanned_at FROM commitment_scans;
+DROP TABLE IF EXISTS commitment_scans;
+CREATE TABLE IF NOT EXISTS decisions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id TEXT NOT NULL,
+    chat_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    title TEXT NOT NULL,
+    owner_name TEXT,
+    due_date TEXT,
+    quote TEXT NOT NULL,
+    speaker_name TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'suggested',
+    ai_status TEXT,
+    ai_note TEXT,
+    followup_local_id INTEGER,
+    source_local_id INTEGER NOT NULL,
+    source_at TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0,
+    model TEXT NOT NULL,
+    user_edited INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (account_id, chat_id, source_local_id, kind),
+    FOREIGN KEY (account_id, chat_id) REFERENCES chats(account_id, chat_id) ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_decisions_chat ON decisions(account_id, chat_id, status);
+"#;
+
 #[derive(Debug, Clone)]
 pub struct Database {
     path: PathBuf,
@@ -154,6 +238,18 @@ impl Database {
             transaction.execute_batch(
                 "INSERT INTO messages_fts(messages_fts) VALUES('rebuild'); PRAGMA user_version = 2;",
             )?;
+            transaction.commit()?;
+        }
+        if version < 3 {
+            let transaction = connection.unchecked_transaction()?;
+            transaction.execute_batch(SCHEMA_V3)?;
+            transaction.execute_batch("PRAGMA user_version = 3;")?;
+            transaction.commit()?;
+        }
+        if version < 4 {
+            let transaction = connection.unchecked_transaction()?;
+            transaction.execute_batch(SCHEMA_V4)?;
+            transaction.execute_batch("PRAGMA user_version = 4;")?;
             transaction.commit()?;
         }
         Ok(())
@@ -627,6 +723,9 @@ impl Database {
             "ai_chunks",
             "ai_index_cursors",
             "ai_cache",
+            "commitments",
+            "memory_scans",
+            "decisions",
         ] {
             transaction.execute(
                 &format!("UPDATE {table} SET account_id=?2 WHERE account_id=?1"),
@@ -807,13 +906,91 @@ mod tests {
             .unwrap()
             .query_row("PRAGMA user_version", [], |row| row.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 4);
         assert_eq!(fts_count(&db), 1);
+        let tables: i64 = db
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('commitments', 'memory_scans', 'decisions')",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(tables, 3);
         let hits = db
             .search_messages("account", "公园拍照", None, &DateRange::default(), 20)
             .unwrap();
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].chat_name, "小艾");
+    }
+
+    #[test]
+    fn upgrades_v2_database_with_commitment_tables() {
+        let db = fixture_db();
+        db.insert_message("account", &text_message(1, "周五前我把合同发你"))
+            .unwrap();
+        db.connection()
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE commitments;
+                 DROP TABLE IF EXISTS commitment_scans;
+                 DROP TABLE IF EXISTS memory_scans;
+                 DROP TABLE IF EXISTS decisions;
+                 PRAGMA user_version = 2;",
+            )
+            .unwrap();
+        db.initialize().unwrap();
+        let connection = db.connection().unwrap();
+        let version: i64 = connection
+            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(version, 4);
+        let scans: i64 = connection
+            .query_row("SELECT COUNT(*) FROM memory_scans", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(scans, 0);
+        assert_eq!(db.max_local_id("account", "alice").unwrap(), Some(1));
+    }
+
+    #[test]
+    fn upgrades_v3_database_and_keeps_scanned_intervals() {
+        let db = fixture_db();
+        db.connection()
+            .unwrap()
+            .execute_batch(
+                "DROP TABLE memory_scans;
+                 DROP TABLE decisions;
+                 CREATE TABLE commitment_scans (
+                    account_id TEXT NOT NULL, chat_id TEXT NOT NULL, from_local_id INTEGER NOT NULL,
+                    to_local_id INTEGER NOT NULL, model TEXT NOT NULL, scanned_at TEXT NOT NULL,
+                    PRIMARY KEY (account_id, chat_id, from_local_id)
+                 );
+                 INSERT INTO commitment_scans VALUES ('account', 'alice', 1, 9, 'qwen3:8b', '2026-10-10T00:00:00Z');
+                 PRAGMA user_version = 3;",
+            )
+            .unwrap();
+        db.initialize().unwrap();
+        let row: (String, i64, i64) = db
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT kind, from_local_id, to_local_id FROM memory_scans",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(row, ("commitment".into(), 1, 9));
+        let old: i64 = db
+            .connection()
+            .unwrap()
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='commitment_scans'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(old, 0);
     }
 
     #[test]

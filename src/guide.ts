@@ -24,6 +24,7 @@ export interface GuideRect {
 export const guideTarget = {
   range: "range",
   overview: "nav-overview",
+  commitments: "nav-commitments",
   detail: "nav-detail",
   ask: "nav-ask",
   report: "nav-report",
@@ -51,7 +52,7 @@ export const previewSteps: GuideStep[] = [
   {
     id: "map",
     title: "进来之后按这个顺序看",
-    body: "右上角先选时间。总览看整体节奏，聊天详情看某一段关系，搜索与问答找回原话，年度报告看一整年，数据管理负责同步、导出和 AI。进入主界面后，这份指引会再带着真实页面走一遍。",
+    body: "右上角先选时间。总览看整体节奏，约定与待办整理答应过的事，聊天详情看某一段关系，搜索与问答找回原话，年度报告看一整年，数据管理负责同步、导出和 AI。进入主界面后，这份指引会再带着真实页面走一遍。",
   },
   {
     id: "ai",
@@ -64,8 +65,8 @@ export const previewSteps: GuideStep[] = [
 export const tourSteps: GuideStep[] = [
   {
     id: "welcome",
-    title: "用一分钟熟悉这五个页面",
-    body: "聊天已经在这台电脑上。指引会按使用顺序走一遍：时间范围、总览、某段聊天、搜索、年度报告，以及数据放在哪里。可以跳过，以后在侧栏底部「使用指引」再打开。",
+    title: "用一分钟熟悉这六个页面",
+    body: "聊天已经在这台电脑上。指引会按使用顺序走一遍：时间范围、总览、约定与待办、某段聊天、搜索、年度报告，以及数据放在哪里。可以跳过，以后在侧栏底部「使用指引」再打开。",
   },
   {
     id: "range",
@@ -82,11 +83,18 @@ export const tourSteps: GuideStep[] = [
     body: "四个数字是消息总数、活跃天数、聊天数量，以及你发出的比例。点「最常聊天」里的名字，会打开那段对话。热力图表示一周里哪些小时最热闹。",
   },
   {
+    id: "commitments",
+    view: "commitments",
+    target: guideTarget.commitments,
+    title: "约定与待办：别忘了答应过的事",
+    body: "打开 AI 后，点「扫描聊天」，它会从当前时间范围里找出你答应别人的事，以及别人答应你的事。找到的先放进「待确认」，你确认后才算数。每条都能点「查看原话」回到聊天里核对。",
+  },
+  {
     id: "detail",
     view: "detail",
     target: guideTarget.detail,
     title: "聊天详情：进入某一段关系",
-    body: "左侧搜索好友或群。右侧是这段时间的时间线，图片、视频和表情包可以直接看。同一页还有趋势、活跃时段和关键词；打开 AI 后，还可以生成摘要和常聊话题。",
+    body: "左侧搜索好友或群。右侧是这段时间的时间线，图片、视频和表情包可以直接看。同一页还有趋势、活跃时段和关键词；打开 AI 后，还可以生成摘要和常聊话题。约定与决策面板汇总这段聊天里的约定，群聊还可以扫描已经定下来和还没定的事。",
   },
   {
     id: "ask",

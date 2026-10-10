@@ -9,7 +9,7 @@ import { InlineNotice } from "./States";
 type Feedback = { tone: "info" | "warning" | "error"; text: string };
 
 function pick(view: AiSettingsView): AiSettingsValues {
-  return { enabled: view.enabled, baseUrl: view.baseUrl, chatModel: view.chatModel, embedModel: view.embedModel, allowCloud: view.allowCloud };
+  return { enabled: view.enabled, baseUrl: view.baseUrl, chatModel: view.chatModel, embedModel: view.embedModel, allowCloud: view.allowCloud, autoScanCommitments: view.autoScanCommitments };
 }
 
 function isLocalUrl(value: string): boolean {
@@ -121,7 +121,7 @@ export function AiSettings({ accountId }: { accountId: string }) {
       <form className="ai-settings-form" onSubmit={save}>
         <label className="switch-row">
           <input type="checkbox" checked={form.enabled} onChange={(event) => update("enabled", event.target.checked)} />
-          <span><strong>开启 AI 功能</strong><small>用于搜索问答、聊天摘要、常聊话题和年度回顾。默认关闭。</small></span>
+          <span><strong>开启 AI 功能</strong><small>用于搜索问答、找出约定、聊天摘要、常聊话题和年度回顾。默认关闭。</small></span>
         </label>
         <div className="field-grid">
           <label className="field wide"><span>服务地址（OpenAI 兼容接口）</span><input value={form.baseUrl} onChange={(event) => update("baseUrl", event.target.value)} placeholder="http://127.0.0.1:11434/v1" spellCheck={false} /></label>
@@ -136,7 +136,13 @@ export function AiSettings({ accountId }: { accountId: string }) {
           </label>
         </div>
         {local ? (
-          <p className="ai-panel-hint">推荐使用 <strong>Ollama</strong>：安装后运行 <code>ollama pull {form.chatModel || "qwen3:8b"}</code> 和 <code>ollama pull {form.embedModel || "bge-m3"}</code>。所有计算都在这台电脑上完成。</p>
+          <>
+            <p className="ai-panel-hint">推荐使用 <strong>Ollama</strong>：安装后运行 <code>ollama pull {form.chatModel || "qwen3:8b"}</code> 和 <code>ollama pull {form.embedModel || "bge-m3"}</code>。所有计算都在这台电脑上完成。</p>
+            <label className="switch-row">
+              <input type="checkbox" checked={form.autoScanCommitments} onChange={(event) => update("autoScanCommitments", event.target.checked)} />
+              <span><strong>同步后自动找出新约定</strong><small>每次同步到新消息后，用本机模型扫描近 30 天里还没读过的聊天，结果放进「约定与待办 → 待确认」。只在本机模型下可用。</small></span>
+            </label>
+          </>
         ) : (
           <InlineNotice tone="warning">
             <strong>这个地址不在本机</strong>

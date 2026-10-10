@@ -1,4 +1,4 @@
-export type ViewName = "overview" | "detail" | "ask" | "report" | "data";
+export type ViewName = "overview" | "commitments" | "detail" | "ask" | "report" | "data";
 export type RangePreset = "30d" | "1y" | "all" | "custom";
 
 export interface DateRange {
@@ -148,6 +148,8 @@ export interface AiSettings {
   chatModel: string;
   embedModel: string;
   allowCloud: boolean;
+  /** Scan new messages for commitments after each sync; local models only. */
+  autoScanCommitments: boolean;
 }
 
 export interface AiSettingsView extends AiSettings {
@@ -301,4 +303,106 @@ export interface ReportResult {
   anonymized: boolean;
   cached: boolean;
   generatedAt?: string;
+}
+
+export type CommitmentStatus = "suggested" | "open" | "done" | "dismissed";
+export type CommitmentDirection = "mine" | "theirs";
+
+export interface Commitment {
+  id: number;
+  chatId: string;
+  chatName: string;
+  chatKind: string;
+  direction: CommitmentDirection;
+  ownerName: string;
+  title: string;
+  quote: string;
+  dueText?: string;
+  dueDate?: string;
+  status: CommitmentStatus;
+  /** What the model concluded from later messages; the user decides. */
+  aiStatus?: "open" | "done" | "cancelled" | "changed" | "unclear";
+  aiNote?: string;
+  followupLocalId?: number;
+  sourceLocalId: number;
+  sourceEndLocalId: number;
+  sourceAt: string;
+  confidence: number;
+  userEdited: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CommitmentFilter {
+  statuses?: CommitmentStatus[];
+  direction?: CommitmentDirection;
+  chatId?: string;
+}
+
+export interface CommitmentPatch {
+  status?: CommitmentStatus;
+  edit?: { title: string; dueDate?: string };
+}
+
+export interface CommitmentCounts {
+  suggested: number;
+  open: number;
+  overdue: number;
+  done: number;
+  dismissed: number;
+  suggestedTotal: number;
+  acceptedTotal: number;
+}
+
+export interface CommitmentEstimate {
+  chats: number;
+  windows: number;
+  skipped: number;
+  chars: number;
+}
+
+export type DecisionKind = "decision" | "question";
+export type DecisionStatus = "suggested" | "active" | "closed" | "dismissed";
+
+export interface Decision {
+  id: number;
+  chatId: string;
+  chatName: string;
+  kind: DecisionKind;
+  title: string;
+  ownerName?: string;
+  dueDate?: string;
+  quote: string;
+  speakerName: string;
+  status: DecisionStatus;
+  aiStatus?: "overturned" | "changed" | "resolved";
+  aiNote?: string;
+  followupLocalId?: number;
+  sourceLocalId: number;
+  sourceAt: string;
+  confidence: number;
+  userEdited: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface DecisionFilter {
+  statuses?: DecisionStatus[];
+  kinds?: DecisionKind[];
+  chatId?: string;
+}
+
+export interface DecisionPatch {
+  status?: DecisionStatus;
+  edit?: { title: string; owner?: string; dueDate?: string };
+}
+
+export interface CommitmentScanOutcome {
+  chats: number;
+  windows: number;
+  skipped: number;
+  failed: number;
+  created: number;
+  updated: number;
+  cancelled: boolean;
 }

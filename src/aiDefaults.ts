@@ -6,6 +6,7 @@ export const defaultAiSettings: AiSettingsView = {
   chatModel: "qwen3:8b",
   embedModel: "bge-m3",
   allowCloud: false,
+  autoScanCommitments: false,
   hasApiKey: false,
   isLocal: true,
   host: "127.0.0.1",

@@ -30,6 +30,7 @@ describe("first-run guide copy", () => {
       undefined,
       "overview",
       "overview",
+      "commitments",
       "detail",
       "ask",
       "report",

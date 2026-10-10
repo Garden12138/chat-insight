@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
     chats: vi.fn(),
     chatDetail: vi.fn(),
     onSyncProgress: vi.fn(),
+    commitments: vi.fn(),
+    commitmentCounts: vi.fn(),
   },
 }));
 
@@ -97,6 +99,8 @@ describe("switching WeChat accounts", () => {
     mocks.api.accounts.mockResolvedValue([oldAccount]);
     mocks.api.dashboard.mockReturnValue(new Promise(() => {}));
     mocks.api.onSyncProgress.mockResolvedValue(() => undefined);
+    mocks.api.commitmentCounts.mockResolvedValue({ suggested: 0, open: 0, overdue: 0, done: 0, dismissed: 0, suggestedTotal: 0, acceptedTotal: 0 });
+    mocks.api.commitments.mockResolvedValue([]);
   });
 
   async function openDataManagement() {
@@ -147,14 +151,18 @@ describe("first-run guide", () => {
     mocks.api.chats.mockResolvedValue([]);
     mocks.api.chatDetail.mockResolvedValue(undefined);
     mocks.api.onSyncProgress.mockResolvedValue(() => undefined);
+    mocks.api.commitmentCounts.mockResolvedValue({ suggested: 0, open: 0, overdue: 0, done: 0, dismissed: 0, suggestedTotal: 0, acceptedTotal: 0 });
+    mocks.api.commitments.mockResolvedValue([]);
   });
 
   it("walks a new user through the main pages and can be opened again", async () => {
     render(<App />);
 
-    expect(await screen.findByRole("dialog", { name: "用一分钟熟悉这五个页面" })).toBeVisible();
+    expect(await screen.findByRole("dialog", { name: "用一分钟熟悉这六个页面" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    expect(screen.getByRole("heading", { name: "约定与待办：别忘了答应过的事" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByRole("heading", { name: "聊天详情" })).toBeVisible();
     expect(screen.getByRole("heading", { name: "聊天详情：进入某一段关系" })).toBeVisible();
@@ -165,6 +173,6 @@ describe("first-run guide", () => {
     expect(screen.getByRole("heading", { name: "聊天总览" })).toBeVisible();
 
     fireEvent.click(screen.getByRole("button", { name: "使用指引" }));
-    expect(screen.getByRole("dialog", { name: "用一分钟熟悉这五个页面" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "用一分钟熟悉这六个页面" })).toBeVisible();
   });
 });

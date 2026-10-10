@@ -1,5 +1,10 @@
 pub mod client;
 pub mod commands;
+pub mod commitments;
+pub mod decisions;
+pub mod extraction;
+#[cfg(test)]
+mod extraction_eval;
 pub mod features;
 pub mod indexer;
 pub mod retrieval;
@@ -69,7 +74,9 @@ impl Sink for StreamSink {
         if self.cancelled() {
             return false;
         }
-        self.emit(text, None);
+        if !text.is_empty() {
+            self.emit(text, None);
+        }
         true
     }
 
@@ -94,6 +101,7 @@ pub struct AiState {
     pub settings: SettingsStore,
     pub index_running: Arc<AtomicBool>,
     pub index_cancel: Arc<AtomicBool>,
+    pub scan_running: Arc<AtomicBool>,
     streams: Arc<Mutex<HashMap<String, Arc<AtomicBool>>>>,
 }
 
@@ -103,6 +111,7 @@ impl AiState {
             settings,
             index_running: Arc::new(AtomicBool::new(false)),
             index_cancel: Arc::new(AtomicBool::new(false)),
+            scan_running: Arc::new(AtomicBool::new(false)),
             streams: Arc::new(Mutex::new(HashMap::new())),
         }
     }

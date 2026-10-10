@@ -1,15 +1,20 @@
 mod ai;
 mod analysis;
 mod bridge;
+mod commitments;
 mod database;
+mod decisions;
 mod error;
 mod insights;
 mod media;
+mod memory;
 mod models;
 mod portable;
 mod wechat_account;
 
+use commitments::{Commitment, CommitmentCounts, CommitmentFilter, CommitmentPatch};
 use database::Database;
+use decisions::{Decision, DecisionFilter, DecisionPatch};
 use media::{MediaKind, MediaResolver};
 use models::{
     AccountSummary, BootstrapResult, ChatDetailData, ChatListItem, DashboardData, DateRange,
@@ -211,6 +216,68 @@ fn clear_account(state: State<'_, AppState>, account_id: String) -> Result<(), S
         .map_err(public_error)
 }
 
+#[tauri::command]
+fn list_commitments(
+    state: State<'_, AppState>,
+    account_id: String,
+    filter: CommitmentFilter,
+) -> Result<Vec<Commitment>, String> {
+    state
+        .database
+        .list_commitments(&account_id, &filter)
+        .map_err(public_error)
+}
+
+#[tauri::command]
+fn update_commitment(
+    state: State<'_, AppState>,
+    account_id: String,
+    id: i64,
+    patch: CommitmentPatch,
+) -> Result<Commitment, String> {
+    state
+        .database
+        .update_commitment(&account_id, id, &patch)
+        .map_err(public_error)
+}
+
+#[tauri::command]
+fn list_decisions(
+    state: State<'_, AppState>,
+    account_id: String,
+    filter: DecisionFilter,
+) -> Result<Vec<Decision>, String> {
+    state
+        .database
+        .list_decisions(&account_id, &filter)
+        .map_err(public_error)
+}
+
+#[tauri::command]
+fn update_decision(
+    state: State<'_, AppState>,
+    account_id: String,
+    id: i64,
+    patch: DecisionPatch,
+) -> Result<Decision, String> {
+    state
+        .database
+        .update_decision(&account_id, id, &patch)
+        .map_err(public_error)
+}
+
+#[tauri::command]
+fn commitment_counts(
+    state: State<'_, AppState>,
+    account_id: String,
+) -> Result<CommitmentCounts, String> {
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    state
+        .database
+        .commitment_counts(&account_id, &today)
+        .map_err(public_error)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -251,6 +318,15 @@ pub fn run() {
             import_jsonl,
             export_jsonl,
             clear_account,
+            list_commitments,
+            update_commitment,
+            commitment_counts,
+            list_decisions,
+            update_decision,
+            ai::commands::ai_commitment_estimate,
+            ai::commands::ai_decision_estimate,
+            ai::commands::ai_scan_decisions,
+            ai::commands::ai_scan_commitments,
             ai::commands::ai_get_settings,
             ai::commands::ai_save_settings,
             ai::commands::ai_test_connection,

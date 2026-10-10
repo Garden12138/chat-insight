@@ -25,7 +25,9 @@ export type IconName =
   | "book"
   | "stop"
   | "cloud"
-  | "help";
+  | "help"
+  | "todo"
+  | "more";
 
 const paths: Record<IconName, ReactNode> = {
   overview: <><rect x="3" y="3" width="7" height="7" rx="2"/><rect x="14" y="3" width="7" height="7" rx="2"/><rect x="3" y="14" width="7" height="7" rx="2"/><rect x="14" y="14" width="7" height="7" rx="2"/></>,
@@ -53,6 +55,8 @@ const paths: Record<IconName, ReactNode> = {
   stop: <rect x="6" y="6" width="12" height="12" rx="2" fill="currentColor" stroke="none"/>,
   cloud: <path d="M7 18a5 5 0 1 1 .9-9.9A6 6 0 0 1 19.5 10 4 4 0 0 1 18 18z"/>,
   help: <><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.8.4-1.4 1-1.4 1.9V14.5"/><path d="M12 17.5h.01"/></>,
+  more: <><circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/></>,
+  todo: <><rect x="3" y="4" width="6" height="6" rx="1.5"/><path d="m4.6 7 1.1 1.1L7.6 6"/><path d="M12.5 7H21"/><rect x="3" y="14" width="6" height="6" rx="1.5"/><path d="M12.5 17H21"/></>,
 };
 
 export function Icon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement>) {

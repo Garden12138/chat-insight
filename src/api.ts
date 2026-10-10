@@ -14,6 +14,15 @@ import type {
   BootstrapResult,
   ChatDetailData,
   ChatListItem,
+  Commitment,
+  CommitmentCounts,
+  CommitmentEstimate,
+  CommitmentFilter,
+  CommitmentPatch,
+  CommitmentScanOutcome,
+  Decision,
+  DecisionFilter,
+  DecisionPatch,
   ContentEstimate,
   DashboardData,
   DateRange,
@@ -97,6 +106,23 @@ export const api = {
     call<YearInsights>("query_year_insights", { accountId, year: year || null }),
   yearReport: (accountId: string, year: string, requestId: string, mode: AiCacheMode, anonymize: boolean) =>
     call<ReportResult | null>("ai_year_report", { accountId, year, requestId, mode, anonymize }),
+  commitments: (accountId: string, filter: CommitmentFilter = {}) =>
+    call<Commitment[]>("list_commitments", { accountId, filter: { statuses: filter.statuses ?? [], direction: filter.direction ?? null, chatId: filter.chatId ?? null } }),
+  updateCommitment: (accountId: string, id: number, patch: CommitmentPatch) =>
+    call<Commitment>("update_commitment", { accountId, id, patch: { status: patch.status ?? null, edit: patch.edit ? { title: patch.edit.title, dueDate: patch.edit.dueDate || null } : null } }),
+  commitmentCounts: (accountId: string) => call<CommitmentCounts>("commitment_counts", { accountId }),
+  commitmentEstimate: (accountId: string, range: DateRange, chatId?: string) =>
+    call<CommitmentEstimate>("ai_commitment_estimate", { accountId, range, chatId: chatId || null }),
+  scanCommitments: (accountId: string, range: DateRange, chatId: string | undefined, requestId: string, cloudConsent: boolean) =>
+    call<CommitmentScanOutcome>("ai_scan_commitments", { accountId, range, chatId: chatId || null, requestId, cloudConsent }),
+  decisions: (accountId: string, filter: DecisionFilter = {}) =>
+    call<Decision[]>("list_decisions", { accountId, filter: { statuses: filter.statuses ?? [], kinds: filter.kinds ?? [], chatId: filter.chatId ?? null } }),
+  updateDecision: (accountId: string, id: number, patch: DecisionPatch) =>
+    call<Decision>("update_decision", { accountId, id, patch: { status: patch.status ?? null, edit: patch.edit ? { title: patch.edit.title, owner: patch.edit.owner || null, dueDate: patch.edit.dueDate || null } : null } }),
+  decisionEstimate: (accountId: string, chatId: string, range: DateRange) =>
+    call<CommitmentEstimate>("ai_decision_estimate", { accountId, chatId, range }),
+  scanDecisions: (accountId: string, chatId: string, range: DateRange, requestId: string, cloudConsent: boolean) =>
+    call<CommitmentScanOutcome>("ai_scan_decisions", { accountId, chatId, range, requestId, cloudConsent }),
   onAiStream: async (handler: (event: AiStreamEvent) => void): Promise<UnlistenFn> => {
     if (!inTauri()) return () => undefined;
     return listen<AiStreamEvent>("ai-stream", (event) => handler(event.payload));

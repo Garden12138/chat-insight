@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
-import type { AccountSummary, BootstrapResult, DateRange, PlatformCapabilities, RangePreset, SyncProgress, ViewName } from "./types";
+import type { AccountSummary, BootstrapResult, CommitmentCounts, DateRange, PlatformCapabilities, RangePreset, SyncProgress, ViewName } from "./types";
 import { BrandMark } from "./components/BrandMark";
 import { DateRangePicker } from "./components/DateRangePicker";
 import { GettingStarted } from "./components/GettingStarted";
@@ -12,15 +12,17 @@ import { Onboarding } from "./views/Onboarding";
 import { Overview } from "./views/Overview";
 import { ChatDetail } from "./views/ChatDetail";
 import { Ask } from "./views/Ask";
+import { Commitments } from "./views/Commitments";
 import { Report } from "./views/Report";
 import { DataManagement } from "./views/DataManagement";
 import { errorMessage, rangeForPreset } from "./utils";
-import { useAi, useRunningAiKinds, usesCloud } from "./ai";
+import { runAiTask, useAi, useAiTask, useRunningAiKinds, usesCloud } from "./ai";
 import type { IconName } from "./components/Icons";
 import { version } from "../package.json";
 
 const navItems: Array<{ id: ViewName; label: string; icon: IconName }> = [
   { id: "overview", label: "总览", icon: "overview" },
+  { id: "commitments", label: "约定与待办", icon: "todo" },
   { id: "detail", label: "聊天详情", icon: "detail" },
   { id: "ask", label: "搜索与问答", icon: "sparkle" },
   { id: "report", label: "年度报告", icon: "book" },
@@ -29,6 +31,7 @@ const navItems: Array<{ id: ViewName; label: string; icon: IconName }> = [
 
 const viewTitles: Record<ViewName, { eyebrow: string; title: string }> = {
   overview: { eyebrow: "YOUR CHAT LANDSCAPE", title: "聊天总览" },
+  commitments: { eyebrow: "PROMISES TO KEEP", title: "约定与待办" },
   detail: { eyebrow: "CONVERSATION FOCUS", title: "聊天详情" },
   ask: { eyebrow: "SEARCH & ASK", title: "搜索与问答" },
   report: { eyebrow: "YEAR IN CHATS", title: "年度报告" },
@@ -51,10 +54,12 @@ export default function App() {
   const [guideMode, setGuideMode] = useState<GuideMode | null>(null);
   const guideReturnView = useRef<ViewName>("overview");
   const autoGuide = useRef(false);
+  const [commitmentCounts, setCommitmentCounts] = useState<CommitmentCounts>();
   const { settings: aiSettings } = useAi();
   const runningAi = useRunningAiKinds().split(",");
   const busyViews: Partial<Record<ViewName, boolean>> = {
-    detail: runningAi.includes("summary") || runningAi.includes("topics"),
+    commitments: runningAi.includes("commitments"),
+    detail: runningAi.includes("summary") || runningAi.includes("topics") || runningAi.includes("decisions"),
     ask: runningAi.includes("ask"),
     report: runningAi.includes("report"),
   };
@@ -62,6 +67,17 @@ export default function App() {
 
   const range = useMemo(() => preset === "custom" ? customRange : rangeForPreset(preset), [preset, customRange]);
   const activeAccount = accounts.find((account) => account.id === accountId) ?? accounts[0];
+  const activeAccountId = activeAccount?.id ?? "";
+  const commitmentScanRunning = useAiTask(`commitments:${activeAccountId}`).running;
+
+  useEffect(() => {
+    if (!activeAccountId) return;
+    let active = true;
+    api.commitmentCounts(activeAccountId)
+      .then((counts) => { if (active) setCommitmentCounts(counts); })
+      .catch(() => undefined);
+    return () => { active = false; };
+  }, [activeAccountId, revision, commitmentScanRunning]);
 
   const notify = useCallback((tone: "success" | "error", text: string) => {
     setToast({ tone, text });
@@ -116,6 +132,9 @@ export default function App() {
       await refreshAccounts(result.accountId);
       setRevision((value) => value + 1);
       notify("success", result.cancelled ? "同步已取消，已完成的数据已保存" : `同步完成：新增 ${result.messagesImported} 条消息${result.messagesImported > 0 ? indexHint : ""}`);
+      if (result.messagesImported > 0 && aiSettings.enabled && aiSettings.isLocal && aiSettings.autoScanCommitments) {
+        void runAiTask(`commitments:${result.accountId}`, (requestId) => api.scanCommitments(result.accountId, rangeForPreset("30d"), undefined, requestId, false), { reset: true });
+      }
     } catch (reason) {
       setSyncProgress(undefined);
       notify("error", errorMessage(reason));
@@ -226,6 +245,7 @@ export default function App() {
           {navItems.map((item) => (
             <button key={item.id} data-guide={`nav-${item.id}`} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
               <Icon name={item.icon} /><span>{item.label}</span>
+              {item.id === "commitments" && !!commitmentCounts?.suggested && <b className="nav-badge" title={`${commitmentCounts.suggested} 条约定待确认`}>{commitmentCounts.suggested > 99 ? "99+" : commitmentCounts.suggested}</b>}
               {busyViews[item.id] && <i className="nav-activity" title="AI 任务进行中" aria-hidden="true" />}
             </button>
           ))}
@@ -250,7 +270,8 @@ export default function App() {
 
         {syncProgress?.running && <div className="sync-strip"><div><span style={{ width: `${syncProgress.total ? (syncProgress.current / syncProgress.total) * 100 : 10}%` }} /></div><p>{syncProgress.message}</p>{syncProgress.phase !== "preparing" && <button onClick={() => api.cancelSync()}>取消</button>}</div>}
         {view === "overview" && <Overview accountId={activeAccount.id} range={range} revision={revision} onOpenDetail={openDetail} />}
-        {view === "detail" && <ChatDetail accountId={activeAccount.id} range={range} revision={revision} requestedChatId={requestedChatId} />}
+        {view === "commitments" && <Commitments accountId={activeAccount.id} range={range} revision={revision} onCountsChange={setCommitmentCounts} onOpenDetail={openDetail} onOpenSettings={() => setView("data")} />}
+        {view === "detail" && <ChatDetail accountId={activeAccount.id} range={range} revision={revision} requestedChatId={requestedChatId} onOpenCommitments={() => setView("commitments")} />}
         {view === "ask" && <Ask accountId={activeAccount.id} range={range} revision={revision} onOpenDetail={openDetail} onOpenSettings={() => setView("data")} />}
         {view === "report" && <Report accountId={activeAccount.id} revision={revision} onOpenDetail={openDetail} onOpenSettings={() => setView("data")} />}
         {view === "data" && <DataManagement account={activeAccount} capabilities={capabilities} busy={busy} onSync={runSync} onSwitchAccount={switchAccount} onImport={importData} onExport={exportData} onClear={clearData} />}

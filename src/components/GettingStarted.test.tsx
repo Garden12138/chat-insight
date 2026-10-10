@@ -22,7 +22,7 @@ describe("getting started tour", () => {
     const onClose = vi.fn();
     render(<Harness onClose={onClose} />);
 
-    expect(screen.getByRole("dialog", { name: "用一分钟熟悉这五个页面" })).toBeVisible();
+    expect(screen.getByRole("dialog", { name: "用一分钟熟悉这六个页面" })).toBeVisible();
     expect(screen.getByRole("button", { name: "上一步" })).toBeDisabled();
 
     fireEvent.click(screen.getByRole("button", { name: "下一步" }));
@@ -30,9 +30,9 @@ describe("getting started tour", () => {
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("overview");
 
     fireEvent.click(screen.getByRole("button", { name: "上一步" }));
-    expect(screen.getByRole("heading", { name: "用一分钟熟悉这五个页面" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "用一分钟熟悉这六个页面" })).toBeVisible();
 
-    for (let step = 0; step < 3; step += 1) fireEvent.click(screen.getByRole("button", { name: "下一步" }));
+    for (let step = 0; step < 4; step += 1) fireEvent.click(screen.getByRole("button", { name: "下一步" }));
     expect(screen.getByRole("heading", { name: "聊天详情：进入某一段关系" })).toBeVisible();
     expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("detail");
 
