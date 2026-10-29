@@ -166,6 +166,7 @@ pub fn retrieve(
     range: &DateRange,
     limit: usize,
 ) -> AppResult<Vec<AskSource>> {
+    client.validate_embed_model()?;
     let model = client.embed_model();
     let mut keyword_keys = Vec::new();
     for hit in keyword_candidates(db, account_id, question, chat_id, range)? {
@@ -222,6 +223,11 @@ pub fn retrieve(
         match key {
             SourceKey::Chunk(id) => {
                 if let Some(chunk) = chunks.get(&id) {
+                    if !occurs_in_range(&chunk.start_at, range)
+                        || !occurs_in_range(&chunk.end_at, range)
+                    {
+                        continue;
+                    }
                     sources.push(AskSource {
                         index,
                         chat_id: chunk.chat_id.clone(),
@@ -236,7 +242,11 @@ pub fn retrieve(
                 }
             }
             SourceKey::Message(chat, local_id) => {
-                let context = db.message_context(account_id, &chat, local_id, 3)?;
+                let context: Vec<_> = db
+                    .message_context(account_id, &chat, local_id, 3)?
+                    .into_iter()
+                    .filter(|item| occurs_in_range(&item.occurred_at, range))
+                    .collect();
                 let (Some(first), Some(last)) = (context.first(), context.last()) else {
                     continue;
                 };
@@ -272,6 +282,17 @@ pub fn retrieve(
         }
     }
     Ok(sources)
+}
+
+fn occurs_in_range(occurred_at: &str, range: &DateRange) -> bool {
+    let date = occurred_at.get(..10).unwrap_or(occurred_at);
+    if range.from.as_deref().is_some_and(|from| date < from) {
+        return false;
+    }
+    if range.to.as_deref().is_some_and(|to| date > to) {
+        return false;
+    }
+    true
 }
 
 #[cfg(test)]

@@ -45,10 +45,10 @@ export function TopicsPanel({ accountId, chatId, chatName, range, revision, keyw
   }, [key, accountId, chatId, range, revision, settings.enabled, settings.chatModel, settings.embedModel]);
 
   async function analyze(mode: "generate" | "refresh") {
-    let detail = `“${chatName}”中尚未建立索引的文本消息会发送给向量模型；归纳话题时还会发送每个话题最多 5 段代表性片段。`;
+    let detail = `“${chatName}”里还没建立索引的消息，以及归纳时用到的聊天摘录。`;
     if (usesCloud(settings)) {
       const estimate = await api.aiEstimate(accountId, {}, chatId);
-      detail = `“${chatName}”中尚未建立索引的文本消息（该聊天共 ${estimate.messages.toLocaleString("zh-CN")} 条，约 ${formatChars(estimate.chars)}）会发送给向量模型；归纳话题时还会发送每个话题最多 5 段代表性片段。`;
+      detail = `“${chatName}”共 ${estimate.messages.toLocaleString("zh-CN")} 条文本（约 ${formatChars(estimate.chars)}），以及归纳时用到的聊天摘录。`;
     }
     const consent = await confirmCloud({ title: "发送聊天记录以归纳话题", detail });
     if (consent === null) return;
@@ -70,7 +70,7 @@ export function TopicsPanel({ accountId, chatId, chatName, range, revision, keyw
               ? <button type="button" className="secondary-button compact" onClick={() => stopAiTask(key)}><Icon name="stop" />停止</button>
               : <button type="button" className={result ? "secondary-button compact" : "primary-button compact"} onClick={() => analyze(result ? "refresh" : "generate")}><Icon name="sparkle" />{result ? "重新归纳" : "归纳话题"}</button>}
           </div>
-        ) : <span className="subtle">仅分析本地文本消息</span>}
+        ) : null}
       </div>
       {showTopics ? (
         running ? <LoadingState label={status || "正在归纳话题…"} /> : result && (
@@ -85,12 +85,12 @@ export function TopicsPanel({ accountId, chatId, chatName, range, revision, keyw
                 </article>
               ))}
             </div>
-            <p className="ai-meta topic-meta">由 {result.chunkCount} 段对话聚类得到{result.generatedAt ? ` · 生成于 ${formatDateTime(result.generatedAt)}` : ""}</p>
+            {result.generatedAt && <p className="ai-meta topic-meta">生成于 {formatDateTime(result.generatedAt)}</p>}
           </>
         )
       ) : (
         <>
-          {aiOn && !result && !showKeywords && <p className="ai-panel-hint topic-hint">下面是按词频统计的关键词。点击“归纳话题”，让 AI 把聊天按语义归成几个话题。</p>}
+          {aiOn && !result && !showKeywords && <p className="ai-panel-hint topic-hint">点「归纳话题」，把这段聊天归成几个主题。</p>}
           <KeywordCloud keywords={keywords} />
         </>
       )}

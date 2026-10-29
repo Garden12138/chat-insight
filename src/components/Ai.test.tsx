@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     aiSettings: vi.fn(),
     saveAiSettings: vi.fn(),
     testAi: vi.fn(),
+    xcliPrivacy: vi.fn(),
     aiIndexStatus: vi.fn(),
     onAiIndexProgress: vi.fn(),
     chatTopics: vi.fn(),
@@ -62,11 +63,56 @@ function ConsentProbe() {
 }
 
 describe("cloud consent", () => {
+  it("treats a loopback xcli gateway as cloud until both selected model routes are verified local", async () => {
+    mocks.api.aiSettings.mockResolvedValue({ ...cloudSettings, provider: "xcli", baseUrl: "http://127.0.0.1:18741/v1", host: "127.0.0.1", isLocal: true });
+    mocks.api.xcliPrivacy.mockRejectedValue(new Error("catalog unavailable"));
+    render(<AiProvider><ConsentProbe /></AiProvider>);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "ask:pending" }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("xcli 配置的上游模型");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(await screen.findByRole("button", { name: "ask:null" })).toBeVisible();
+    mocks.api.xcliPrivacy.mockResolvedValue({ chatCloud: false, embeddingCloud: false, chatLocation: "local", embeddingLocation: "local" });
+    fireEvent.click(screen.getByRole("button", { name: "ask:null" }));
+    expect(await screen.findByRole("button", { name: "ask:false" })).toBeVisible();
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("does not infer local inference from malformed or partially remote gateway metadata", async () => {
+    mocks.api.aiSettings.mockResolvedValue({ ...cloudSettings, provider: "xcli", baseUrl: "http://127.0.0.1:18741/v1" });
+    mocks.api.xcliPrivacy.mockResolvedValue({});
+    render(<AiProvider><ConsentProbe /></AiProvider>);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "ask:pending" }));
+    expect(await screen.findByRole("alertdialog")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    await screen.findByRole("button", { name: "ask:null" });
+    mocks.api.xcliPrivacy.mockResolvedValue({ chatCloud: false, embeddingCloud: true });
+    fireEvent.click(screen.getByRole("button", { name: "ask:null" }));
+    expect(await screen.findByRole("alertdialog")).toBeVisible();
+  });
   it("resolves immediately for local models", async () => {
     render(<AiProvider><ConsentProbe /></AiProvider>);
     fireEvent.click(screen.getByRole("button", { name: "ask:pending" }));
     expect(await screen.findByRole("button", { name: "ask:false" })).toBeVisible();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
+  it("asks before sending chat content to 阿里云百炼", async () => {
+    mocks.api.aiSettings.mockResolvedValue({
+      ...cloudSettings,
+      provider: "bailian",
+      baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      host: "dashscope.aliyuncs.com",
+    });
+    render(<AiProvider><ConsentProbe /></AiProvider>);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "ask:pending" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("阿里云百炼");
+    expect(dialog).not.toHaveTextContent("dashscope.aliyuncs.com");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(await screen.findByRole("button", { name: "ask:null" })).toBeVisible();
   });
 
   it("asks before sending chat content to a cloud host", async () => {
@@ -111,10 +157,29 @@ describe("TopicsPanel", () => {
 });
 
 describe("AiSettings", () => {
+  it("selects 阿里云百炼 with an editable namespace endpoint and required API key", async () => {
+    render(<AiProvider><AiSettings accountId="a" /></AiProvider>);
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("radio", { name: "阿里云百炼" }));
+    const endpoint = screen.getByLabelText("服务地址");
+    expect(endpoint).toHaveValue("https://dashscope.aliyuncs.com/compatible-mode/v1");
+    expect(endpoint).not.toHaveAttribute("readonly");
+    fireEvent.change(endpoint, { target: { value: "https://llm-demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1" } });
+    expect(endpoint).toHaveValue("https://llm-demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1");
+    expect(screen.getByLabelText("对话模型")).toHaveValue("qwen-plus");
+    expect(screen.getByLabelText("向量模型")).toHaveValue("text-embedding-v3");
+    expect(screen.getByText("聊天内容会发送到阿里云百炼")).toBeVisible();
+    expect(screen.getByLabelText("阿里云百炼 API Key")).toHaveAttribute("placeholder", "必填");
+    expect(screen.queryByText(/所有计算都在这台电脑上完成/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/同步后自动找出新约定/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("允许使用云端模型服务")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存并测试连接" })).toBeEnabled();
+    expect(mocks.api.testAi).not.toHaveBeenCalled();
+  });
   it("requires opting in before testing a cloud endpoint", async () => {
     render(<AiProvider><AiSettings accountId="a" /></AiProvider>);
     await act(async () => {});
-    fireEvent.change(screen.getByLabelText("服务地址（OpenAI 兼容接口）"), { target: { value: "https://api.example.com/v1" } });
+    fireEvent.change(screen.getByLabelText("服务地址"), { target: { value: "https://api.example.com/v1" } });
     expect(screen.getByText("这个地址不在本机")).toBeVisible();
     const testButton = screen.getByRole("button", { name: "保存并测试连接" });
     expect(testButton).toBeDisabled();

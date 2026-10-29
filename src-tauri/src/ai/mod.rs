@@ -1,11 +1,14 @@
 pub mod client;
 pub mod commands;
 pub mod commitments;
+pub mod dates;
 pub mod decisions;
+pub mod events;
 pub mod extraction;
 #[cfg(test)]
 mod extraction_eval;
 pub mod features;
+pub mod gateway;
 pub mod indexer;
 pub mod retrieval;
 pub mod settings;
@@ -118,8 +121,14 @@ impl AiState {
 
     pub fn client(&self) -> (AiSettings, OpenAiCompatClient) {
         let settings = self.settings.load();
-        let client = OpenAiCompatClient::new(&settings, self.settings.api_key());
+        let client = OpenAiCompatClient::new(&settings, self.settings.api_key())
+            .with_index_identity(self.settings.embedding_identity());
         (settings, client)
+    }
+
+    pub fn client_with_consent(&self, consent: bool) -> (AiSettings, OpenAiCompatClient) {
+        let (settings, client) = self.client();
+        (settings, client.with_cloud_consent(consent))
     }
 
     pub fn stream(&self, app: &AppHandle, request_id: &str) -> StreamSink {

@@ -23,6 +23,8 @@ import type {
   Decision,
   DecisionFilter,
   DecisionPatch,
+  EventReviewEstimate,
+  EventReviewResult,
   ContentEstimate,
   DashboardData,
   DateRange,
@@ -89,6 +91,7 @@ export const api = {
   aiSettings: async () => (inTauri() ? call<AiSettingsView>("ai_get_settings") : defaultAiSettings),
   saveAiSettings: (input: AiSettingsInput) => call<AiSettingsView>("ai_save_settings", { input }),
   testAi: () => call<AiTestResult>("ai_test_connection"),
+  xcliPrivacy: () => call<import("./types").GatewayPrivacy | null>("ai_xcli_privacy"),
   aiIndexStatus: (accountId: string) => call<AiIndexStatus>("ai_index_status", { accountId }),
   buildAiIndex: (accountId: string, rebuild: boolean, cloudConsent: boolean) =>
     call<AiIndexOutcome>("ai_build_index", { accountId, rebuild, cloudConsent }),
@@ -98,6 +101,10 @@ export const api = {
     call<ContentEstimate>("ai_estimate", { accountId, chatId: chatId || null, range }),
   ask: (accountId: string, question: string, range: DateRange, chatId: string | undefined, requestId: string, cloudConsent: boolean) =>
     call<AskResult>("ai_ask", { accountId, question, chatId: chatId || null, range, requestId, cloudConsent }),
+  eventReviewEstimate: (accountId: string, date: string, chatId?: string) =>
+    call<EventReviewEstimate>("ai_event_review_estimate", { accountId, date, chatId: chatId || null }),
+  reviewGroupEvents: (accountId: string, date: string, chatId: string | undefined, requestId: string, mode: AiCacheMode, cloudConsent: boolean) =>
+    call<EventReviewResult>("ai_review_group_events", { accountId, date, chatId: chatId || null, requestId, mode, cloudConsent }),
   summarizeChat: (accountId: string, chatId: string, range: DateRange, requestId: string, mode: AiCacheMode, cloudConsent = false) =>
     call<SummaryResult | null>("ai_summarize_chat", { accountId, chatId, range, requestId, mode, cloudConsent }),
   chatTopics: (accountId: string, chatId: string, range: DateRange, requestId: string, mode: AiCacheMode, cloudConsent = false) =>

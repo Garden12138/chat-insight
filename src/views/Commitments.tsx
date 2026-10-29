@@ -82,17 +82,17 @@ export function Commitments({ accountId, range, revision, onCountsChange, onOpen
 
   async function startScan() {
     const scope = chatId ? `“${chats.find((chat) => chat.id === chatId)?.displayName ?? "所选聊天"}”` : "所有聊天";
-    let detail = `${scope}在当前日期范围内含有约定线索的聊天片段（每段附带前 6 条消息），以及这些聊天里未完成约定的标题。`;
+    let detail = `${scope}在当前日期范围内含有约定线索的聊天，以及未完成约定的标题。`;
     if (usesCloud(settings)) {
       try {
         const estimate = await api.commitmentEstimate(accountId, range, chatId);
-        detail = `${scope}中 ${estimate.windows.toLocaleString("zh-CN")} 段含有约定线索的聊天（来自 ${estimate.chats} 个聊天，约 ${formatChars(estimate.chars)}，含每段前 6 条消息），以及这些聊天里未完成约定的标题。没有线索的 ${estimate.skipped.toLocaleString("zh-CN")} 段不会发送。`;
+        detail = `${scope}中大约 ${estimate.windows.toLocaleString("zh-CN")} 段聊天（来自 ${estimate.chats} 个聊天，约 ${formatChars(estimate.chars)}），以及未完成约定的标题。`;
       } catch (reason) {
         setError(errorMessage(reason));
         return;
       }
     }
-    const consent = await confirmCloud({ title: "发送聊天片段以找出约定", detail });
+    const consent = await confirmCloud({ title: "发送聊天以找出约定", detail });
     if (consent === null) return;
     await runAiTask(scanKey, (requestId) => api.scanCommitments(accountId, range, chatId, requestId, consent), { reset: true });
   }
@@ -122,7 +122,7 @@ export function Commitments({ accountId, range, revision, onCountsChange, onOpen
           {settings.enabled ? (
             <>
               <div className="commitment-scan-row">
-                <p className="ai-panel-hint">AI 会读取顶部日期范围内的聊天，找出“我答应的”和“对方答应我的”事。只有含约定线索的片段会交给模型，已经扫描过的消息不会重复读取。找到的约定先放进“待确认”，由你决定是否保留。</p>
+                <p className="ai-panel-hint">从当前日期范围找出答应过的事，先放进「待确认」。</p>
                 <select value={chatId} onChange={(event) => setChatId(event.target.value)} aria-label="扫描范围" disabled={scan.running}>
                   <option value="">全部聊天</option>
                   {chats.map((chat) => <option key={chat.id} value={chat.id}>{chat.displayName}</option>)}
@@ -136,7 +136,7 @@ export function Commitments({ accountId, range, revision, onCountsChange, onOpen
           ) : (
             <InlineNotice tone="warning">
               <strong>扫描需要先开启 AI</strong>
-              <p>在“数据管理 → AI 设置”中开启，并连接本机的 Ollama 或其他模型服务。已经保存的约定不需要 AI 也能查看和管理。</p>
+              <p>到「数据管理 → AI 设置」里开启。已经保存的约定仍可查看。</p>
               <button type="button" className="secondary-button notice-action" onClick={onOpenSettings}>前往 AI 设置</button>
             </InlineNotice>
           )}

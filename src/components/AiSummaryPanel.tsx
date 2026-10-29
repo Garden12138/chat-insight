@@ -43,7 +43,7 @@ export function AiSummaryPanel({ accountId, chatId, chatName, range, revision }:
   const { running, text, status, result, error } = task;
   let body;
   if (!settings.enabled) {
-    body = <p className="ai-panel-hint">在“数据管理 → AI 设置”中开启 AI 后，可以一键总结这段时间聊了什么、做了哪些约定。</p>;
+    body = <p className="ai-panel-hint">到「数据管理 → AI 设置」里开启后，可以总结这段时间聊了什么。</p>;
   } else if (running) {
     body = text ? <><Markdown text={text} /><p className="stream-status"><span className="spinner" />{status || "正在生成…"}</p></> : <LoadingState label={status || "正在准备…"} />;
   } else if (result) {
@@ -56,7 +56,7 @@ export function AiSummaryPanel({ accountId, chatId, chatName, range, revision }:
   } else if (text) {
     body = <><Markdown text={text} /><p className="ai-meta">已停止生成</p></>;
   } else {
-    body = <p className="ai-panel-hint">让 AI 阅读当前日期范围内的聊天，整理出主要话题和约定。范围越大，耗时越长；生成期间可以切换到其他页面。</p>;
+    body = <p className="ai-panel-hint">整理这段时间聊了什么。</p>;
   }
 
   return (

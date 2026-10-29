@@ -38,5 +38,8 @@ describe("first-run guide copy", () => {
       "overview",
     ]);
     expect(new Set(tourSteps.map((step) => step.title)).size).toBe(tourSteps.length);
+    expect(previewSteps.find((step) => step.id === "ai")?.body).toContain("阿里云百炼");
+    expect(tourSteps.find((step) => step.id === "ask")?.body).toContain("事件回顾");
+    expect(tourSteps.find((step) => step.id === "data")?.body).toContain("阿里云百炼");
   });
 });

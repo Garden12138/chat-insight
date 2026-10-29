@@ -80,8 +80,8 @@ export function ChatMemoryPanel({ accountId, chatId, chatName, chatKind, range, 
     const running = kind === "commitment" ? commitmentScan.running : decisionScan.running;
     if (running) return;
     let detail = kind === "commitment"
-      ? `“${chatName}”在当前日期范围内含有约定线索的聊天片段，以及这里未完成的约定标题。`
-      : `“${chatName}”在当前日期范围内含有决策线索的聊天片段，以及这个群里仍然有效的决定和待定事项标题。`;
+      ? `“${chatName}”在当前日期范围内含有约定线索的聊天，以及这里未完成的约定。`
+      : `“${chatName}”在当前日期范围内含有决策线索的聊天，以及这个群里仍然有效的决定和待定事项。`;
     if (usesCloud(settings)) {
       try {
         const estimate = kind === "commitment"
@@ -93,7 +93,7 @@ export function ChatMemoryPanel({ accountId, chatId, chatName, chatKind, range, 
         return;
       }
     }
-    const consent = await confirmCloud({ title: kind === "commitment" ? "发送聊天片段以找出约定" : "发送群聊片段以找出决策", detail });
+    const consent = await confirmCloud({ title: kind === "commitment" ? "发送聊天以找出约定" : "发送群聊以找出决策", detail });
     if (consent === null) return;
     const key = kind === "commitment" ? commitmentKey : decisionKey;
     await runAiTask(key, (requestId) => kind === "commitment"

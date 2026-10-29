@@ -45,6 +45,21 @@ pub struct ContentEstimate {
     pub chars: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct EventTextMessage {
+    pub chat_id: String,
+    pub chat_name: String,
+    pub chat_kind: String,
+    pub local_id: i64,
+    pub occurred_at: String,
+    pub local_date: String,
+    pub sender_name: String,
+    pub is_from_me: bool,
+    pub text: String,
+}
+
+const EVENT_FILTER: &str = "m.account_id=?1 AND m.local_date=?2 AND c.chat_kind IN ('group','direct') AND m.kind='text' AND m.text<>'' AND (?3 IS NULL OR m.chat_id=?3)";
+
 pub fn encode_vector(vector: &[f32]) -> Vec<u8> {
     vector
         .iter()
@@ -322,6 +337,56 @@ impl Database {
             .optional()?)
     }
 
+    pub fn ai_group_event_messages(
+        &self,
+        account_id: &str,
+        date: &str,
+        chat_id: Option<&str>,
+    ) -> AppResult<Vec<EventTextMessage>> {
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(&format!(
+            "SELECT m.chat_id, c.display_name, c.chat_kind, m.local_id, m.occurred_at, m.local_date,
+                    m.sender_name, m.is_from_me, m.text
+             FROM messages m
+             JOIN chats c ON c.account_id=m.account_id AND c.chat_id=m.chat_id
+             WHERE {EVENT_FILTER}
+             ORDER BY m.occurred_at, m.chat_id, m.local_id"
+        ))?;
+        let rows = statement.query_map(params![account_id, date, chat_id], |row| {
+            Ok(EventTextMessage {
+                chat_id: row.get(0)?,
+                chat_name: row.get(1)?,
+                chat_kind: row.get(2)?,
+                local_id: row.get(3)?,
+                occurred_at: row.get(4)?,
+                local_date: row.get(5)?,
+                sender_name: row.get(6)?,
+                is_from_me: row.get::<_, i64>(7)? != 0,
+                text: row.get(8)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
+    pub fn ai_group_event_fingerprint(
+        &self,
+        account_id: &str,
+        date: &str,
+        chat_id: Option<&str>,
+    ) -> AppResult<String> {
+        let connection = self.connection()?;
+        Ok(connection.query_row(
+            &format!(
+                "SELECT COUNT(*) || ':' || COALESCE(MAX(m.rowid), 0)
+                 FROM messages m
+                 JOIN chats c ON c.account_id=m.account_id AND c.chat_id=m.chat_id
+                 WHERE {EVENT_FILTER}"
+            ),
+            params![account_id, date, chat_id],
+            |row| row.get(0),
+        )?)
+    }
+
     pub fn ai_cache_get(
         &self,
         key: &CacheKey,
@@ -378,10 +443,178 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::NormalizedMessage;
+    use tempfile::tempdir;
+
+    fn fixture_db() -> Database {
+        let directory = tempdir().unwrap().keep();
+        let db = Database::new(directory.join("test.db"));
+        db.initialize().unwrap();
+        db.upsert_account("account", "测试", "fixture").unwrap();
+        db.upsert_chat("account", "alice", "小艾", "direct")
+            .unwrap();
+        db.upsert_chat("account", "g1", "产品群", "group").unwrap();
+        db.upsert_chat("account", "g2", "运营群", "group").unwrap();
+        db
+    }
+
+    fn insert(db: &Database, chat_id: &str, local_id: i64, at: &str, kind: &str, text: &str) {
+        db.insert_message(
+            "account",
+            &NormalizedMessage {
+                chat_id: chat_id.into(),
+                local_id,
+                server_id: None,
+                occurred_at: at.into(),
+                local_date: at[..10].into(),
+                local_hour: 9,
+                local_weekday: 0,
+                sender_id: "other".into(),
+                sender_name: "成员".into(),
+                is_from_me: false,
+                kind: kind.into(),
+                text: text.into(),
+            },
+        )
+        .unwrap();
+    }
 
     #[test]
     fn round_trips_vectors() {
         let vector = vec![0.25f32, -1.5, 3.0];
         assert_eq!(decode_vector(&encode_vector(&vector)), vector);
+    }
+
+    #[test]
+    fn event_query_keeps_same_day_group_and_direct_text() {
+        let db = fixture_db();
+        insert(
+            &db,
+            "g1",
+            1,
+            "2026-10-26T23:50:00+08:00",
+            "text",
+            "昨天的群消息",
+        );
+        insert(
+            &db,
+            "g1",
+            2,
+            "2026-10-27T09:00:00+08:00",
+            "text",
+            "当天产品通知",
+        );
+        insert(
+            &db,
+            "g1",
+            3,
+            "2026-10-28T00:10:00+08:00",
+            "text",
+            "明天的群消息",
+        );
+        insert(
+            &db,
+            "alice",
+            4,
+            "2026-10-27T09:05:00+08:00",
+            "text",
+            "私聊不要进来",
+        );
+        insert(
+            &db,
+            "g2",
+            5,
+            "2026-10-27T10:00:00+08:00",
+            "text",
+            "运营群消息",
+        );
+        insert(&db, "g1", 6, "2026-10-27T11:00:00+08:00", "text", "");
+        insert(
+            &db,
+            "g1",
+            7,
+            "2026-10-27T12:00:00+08:00",
+            "image",
+            "图片说明",
+        );
+        for index in 8..21 {
+            insert(
+                &db,
+                "g1",
+                index,
+                &format!("2026-10-27T13:{:02}:00+08:00", index),
+                "text",
+                &format!("超过普通问答上限的第{index}条"),
+            );
+        }
+
+        let all = db
+            .ai_group_event_messages("account", "2026-10-27", None)
+            .unwrap();
+        assert!(all.iter().all(|message| message.local_date == "2026-10-27"));
+        assert!(all
+            .iter()
+            .all(|message| message.chat_kind == "group" || message.chat_kind == "direct"));
+        assert!(all.iter().all(|message| !message.text.is_empty()));
+        assert_eq!(
+            all.iter()
+                .filter(|message| message.chat_id == "alice")
+                .count(),
+            1
+        );
+        assert!(all.len() > 12);
+        assert_eq!(all.first().unwrap().chat_id, "g1");
+
+        let one = db
+            .ai_group_event_messages("account", "2026-10-27", Some("g2"))
+            .unwrap();
+        assert_eq!(one.len(), 1);
+        assert_eq!(one[0].chat_id, "g2");
+        assert_eq!(one[0].text, "运营群消息");
+
+        let direct = db
+            .ai_group_event_messages("account", "2026-10-27", Some("alice"))
+            .unwrap();
+        assert_eq!(direct.len(), 1);
+        assert_eq!(direct[0].chat_id, "alice");
+        assert_eq!(direct[0].chat_kind, "direct");
+
+        let group_before = db
+            .ai_group_event_fingerprint("account", "2026-10-27", Some("g1"))
+            .unwrap();
+        let all_before = db
+            .ai_group_event_fingerprint("account", "2026-10-27", None)
+            .unwrap();
+        insert(
+            &db,
+            "alice",
+            40,
+            "2026-10-27T18:00:00+08:00",
+            "text",
+            "私聊变化",
+        );
+        assert_eq!(
+            db.ai_group_event_fingerprint("account", "2026-10-27", Some("g1"))
+                .unwrap(),
+            group_before
+        );
+        assert_ne!(
+            db.ai_group_event_fingerprint("account", "2026-10-27", None)
+                .unwrap(),
+            all_before
+        );
+        insert(
+            &db,
+            "g2",
+            41,
+            "2026-10-27T18:10:00+08:00",
+            "text",
+            "群聊新增",
+        );
+        assert_ne!(
+            db.ai_group_event_fingerprint("account", "2026-10-27", None)
+                .unwrap(),
+            all_before
+        );
     }
 }

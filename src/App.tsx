@@ -16,6 +16,7 @@ import { Commitments } from "./views/Commitments";
 import { Report } from "./views/Report";
 import { DataManagement } from "./views/DataManagement";
 import { errorMessage, rangeForPreset } from "./utils";
+import { aiServiceHost } from "./aiDefaults";
 import { runAiTask, useAi, useAiTask, useRunningAiKinds, usesCloud } from "./ai";
 import type { IconName } from "./components/Icons";
 import { version } from "../package.json";
@@ -63,8 +64,6 @@ export default function App() {
     ask: runningAi.includes("ask"),
     report: runningAi.includes("report"),
   };
-  const indexHint = aiSettings.enabled ? "。可在“数据管理 → AI 设置”中更新语义索引" : "";
-
   const range = useMemo(() => preset === "custom" ? customRange : rangeForPreset(preset), [preset, customRange]);
   const activeAccount = accounts.find((account) => account.id === accountId) ?? accounts[0];
   const activeAccountId = activeAccount?.id ?? "";
@@ -131,7 +130,7 @@ export default function App() {
       const result = await api.sync();
       await refreshAccounts(result.accountId);
       setRevision((value) => value + 1);
-      notify("success", result.cancelled ? "同步已取消，已完成的数据已保存" : `同步完成：新增 ${result.messagesImported} 条消息${result.messagesImported > 0 ? indexHint : ""}`);
+      notify("success", result.cancelled ? "同步已取消，已完成的数据已保存" : `同步完成：新增 ${result.messagesImported} 条消息`);
       if (result.messagesImported > 0 && aiSettings.enabled && aiSettings.isLocal && aiSettings.autoScanCommitments) {
         void runAiTask(`commitments:${result.accountId}`, (requestId) => api.scanCommitments(result.accountId, rangeForPreset("30d"), undefined, requestId, false), { reset: true });
       }
@@ -188,7 +187,7 @@ export default function App() {
       const result = await api.importJsonl(selected);
       await refreshAccounts(result.accountId);
       setRevision((value) => value + 1);
-      notify("success", `已导入 ${result.messagesImported} 条消息${result.messagesImported > 0 ? indexHint : ""}`);
+      notify("success", `已导入 ${result.messagesImported} 条消息`);
     } catch (reason) {
       notify("error", errorMessage(reason));
     } finally {
@@ -253,7 +252,7 @@ export default function App() {
         <div className="sidebar-spacer" />
         <button type="button" className="guide-button" onClick={showGuide}><Icon name="help" /><span>使用指引</span></button>
         {usesCloud(aiSettings)
-          ? <div className="local-badge cloud" data-guide="privacy"><span /><div><strong>已启用云端 AI</strong><small>确认后发送至 {aiSettings.host}</small></div></div>
+          ? <div className="local-badge cloud" data-guide="privacy"><span /><div><strong>已启用云端 AI</strong><small>确认后发送至 {aiServiceHost(aiSettings)}</small></div></div>
           : <div className="local-badge" data-guide="privacy"><span /><div><strong>仅在本机</strong><small>数据未上传</small></div></div>}
         <p className="version">Chat Insight v{version}</p>
       </aside>

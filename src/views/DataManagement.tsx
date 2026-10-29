@@ -22,7 +22,7 @@ export function DataManagement({ account, capabilities, busy, onSync, onSwitchAc
       <section className="data-intro">
         <p className="eyebrow">DATA & PRIVACY</p>
         <h2>你的数据，只在这里。</h2>
-        <p>Chat Insight 的数据库位于本机应用数据目录。导出文件包含聊天正文，请像保护聊天记录一样妥善保存。</p>
+        <p>导出文件含聊天正文，请妥善保存。</p>
       </section>
 
       <section className="panel source-card">
@@ -32,7 +32,7 @@ export function DataManagement({ account, capabilities, busy, onSync, onSwitchAc
 
       <div className="data-action-grid">
         <article className="panel action-card">
-          <div className="action-icon coral"><Icon name="refresh" /></div><div><h3>更新本地记录</h3><p>读取新消息并增量写入，不会修改微信原始数据。</p></div>
+          <div className="action-icon coral"><Icon name="refresh" /></div><div><h3>更新本地记录</h3><p>读取微信里的新消息，不会改微信里的内容。</p></div>
           <button className="secondary-button" disabled={busy || !canReadWechat} onClick={onSync}>立即同步</button>
         </article>
         {canReadWechat && (
@@ -42,11 +42,11 @@ export function DataManagement({ account, capabilities, busy, onSync, onSwitchAc
           </article>
         )}
         <article className="panel action-card">
-          <div className="action-icon green"><Icon name="download" /></div><div><h3>导出便携数据</h3><p>生成 chat-insight-jsonl v1，可在另一台电脑导入。</p></div>
+          <div className="action-icon green"><Icon name="download" /></div><div><h3>导出便携数据</h3><p>导出后可在另一台电脑导入。</p></div>
           <button className="secondary-button" disabled={busy} onClick={onExport}>导出 JSONL</button>
         </article>
         <article className="panel action-card">
-          <div className="action-icon gold"><Icon name="upload" /></div><div><h3>导入分析数据</h3><p>导入会去重；未知版本或损坏文件不会写入数据库。</p></div>
+          <div className="action-icon gold"><Icon name="upload" /></div><div><h3>导入分析数据</h3><p>导入已有的导出文件。</p></div>
           <button className="secondary-button" disabled={busy} onClick={onImport}>选择文件</button>
         </article>
         <article className="panel action-card danger-card">

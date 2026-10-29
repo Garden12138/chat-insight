@@ -174,7 +174,7 @@ describe("scanning", () => {
     renderView();
     await act(async () => {});
     fireEvent.click(screen.getByRole("button", { name: "扫描聊天" }));
-    expect(await screen.findByText(/4 段含有约定线索的聊天/)).toBeVisible();
+    expect(await screen.findByText(/大约 4 段聊天/)).toBeVisible();
     expect(mocks.api.scanCommitments).not.toHaveBeenCalled();
   });
 

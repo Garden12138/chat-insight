@@ -142,7 +142,10 @@ export interface ExportResult {
   messagesExported: number;
 }
 
+export type AiProvider = "openai_compatible" | "bailian" | "xcli";
+
 export interface AiSettings {
+  provider?: AiProvider;
   enabled: boolean;
   baseUrl: string;
   chatModel: string;
@@ -167,6 +170,14 @@ export interface AiTestResult {
   models: string[];
   chatModelFound: boolean;
   embeddingDimension: number;
+  gateway?: GatewayPrivacy | null;
+}
+
+export interface GatewayPrivacy {
+  chatCloud: boolean;
+  embeddingCloud: boolean;
+  chatLocation: string;
+  embeddingLocation: string;
 }
 
 export interface AiIndexStatus {
@@ -230,6 +241,60 @@ export interface AskSource {
 export interface AskResult {
   answer: string;
   sources: AskSource[];
+}
+
+export type EventCategory =
+  | "announcement"
+  | "decision"
+  | "task_progress"
+  | "issue"
+  | "plan"
+  | "information";
+
+export interface EventReviewEstimate {
+  date: string;
+  chatCount: number;
+  messageCount: number;
+  chars: number;
+  segmentCount: number;
+}
+
+export interface EventSourceRef {
+  chatId: string;
+  chatName: string;
+  chatKind: string;
+  localId: number;
+  occurredAt: string;
+  senderName: string;
+  isFromMe: boolean;
+  text: string;
+}
+
+export interface EventItem {
+  id: string;
+  title: string;
+  category: EventCategory;
+  summary: string;
+  startAt: string;
+  endAt: string;
+  sourceRefs: EventSourceRef[];
+  scheduledDate?: string;
+}
+
+export interface EventReviewResult {
+  date: string;
+  scope: string;
+  events: EventItem[];
+  chatCount: number;
+  messageCount: number;
+  processedMessages: number;
+  totalSegments: number;
+  completedSegments: number;
+  failedSegments: number;
+  complete: boolean;
+  cancelled: boolean;
+  cached: boolean;
+  generatedAt?: string;
 }
 
 export type AiCacheMode = "cached" | "generate" | "refresh";

@@ -28,7 +28,7 @@ export function CloudConsent({ host, request, onDecide }: CloudConsentProps) {
         <h2 id="consent-title">{request.title}</h2>
         <p>这次请求会把以下内容发送到 <strong>{host}</strong>，由该服务处理：</p>
         <p className="consent-detail">{request.detail}</p>
-        <p className="subtle">发送后的数据受该服务的隐私政策约束，Chat Insight 无法撤回。使用本机模型（如 Ollama）则不会离开这台电脑。</p>
+        <p className="subtle">发送后的数据受该服务的隐私政策约束，Chat Insight 无法撤回。</p>
         <div className="modal-actions">
           <button ref={cancelRef} type="button" className="secondary-button" onClick={() => onDecide(false)}>取消</button>
           <button type="button" className="primary-button" onClick={() => onDecide(true)}>确认发送</button>

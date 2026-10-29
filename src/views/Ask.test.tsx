@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resetAiState } from "../ai";
 import { defaultAiSettings } from "../aiDefaults";
 import { AiProvider } from "../components/AiProvider";
-import type { AiStreamEvent, AskResult, SearchHit } from "../types";
+import type { AiStreamEvent, AskResult, EventReviewEstimate, EventReviewResult, SearchHit } from "../types";
 import { Ask } from "./Ask";
 
 const mocks = vi.hoisted(() => ({
@@ -15,6 +15,8 @@ const mocks = vi.hoisted(() => ({
     searchMessages: vi.fn(),
     messageContext: vi.fn(),
     ask: vi.fn(),
+    eventReviewEstimate: vi.fn(),
+    reviewGroupEvents: vi.fn(),
     cancelAi: vi.fn(),
     onAiStream: vi.fn(),
     onAiIndexProgress: vi.fn(),
@@ -45,8 +47,12 @@ beforeEach(() => {
   mocks.api.onAiIndexProgress.mockResolvedValue(() => undefined);
   mocks.streamHandler = undefined;
   mocks.api.aiSettings.mockResolvedValue({ ...defaultAiSettings, enabled: true });
-  mocks.api.chats.mockResolvedValue([{ id: "alice", displayName: "小艾", chatKind: "direct", messageCount: 3 }]);
+  mocks.api.chats.mockResolvedValue([
+    { id: "alice", displayName: "小艾", chatKind: "direct", messageCount: 3 },
+    { id: "g1", displayName: "产品群", chatKind: "group", messageCount: 12 },
+  ]);
   mocks.api.aiIndexStatus.mockResolvedValue({ model: "bge-m3", running: false, indexedChunks: 4, pendingMessages: 0, totalTextMessages: 9 });
+  mocks.api.eventReviewEstimate.mockResolvedValue({ date: "2026-10-27", chatCount: 1, messageCount: 4, chars: 80, segmentCount: 1 } satisfies EventReviewEstimate);
   mocks.api.cancelAi.mockResolvedValue(undefined);
   mocks.api.onAiStream.mockImplementation(async (handler: (event: AiStreamEvent) => void) => {
     mocks.streamHandler = handler;
@@ -138,5 +144,126 @@ describe("AI ask", () => {
     fireEvent.click(screen.getByRole("tab", { name: /AI 问答/ }));
     expect(screen.getByText("AI 问答尚未开启")).toBeVisible();
     expect(screen.getByRole("button", { name: "提问" })).toBeDisabled();
+  });
+});
+
+const reviewResult: EventReviewResult = {
+  date: "2026-10-27",
+  scope: "all-chats",
+  events: [{
+    id: "g1:1:发布",
+    title: "发布窗口调整",
+    category: "decision",
+    summary: "今晚发布",
+    startAt: "2026-10-27T09:00:00+08:00",
+    endAt: "2026-10-27T09:00:00+08:00",
+    sourceRefs: [{
+      chatId: "g1",
+      chatName: "产品群",
+      chatKind: "group",
+      localId: 1,
+      occurredAt: "2026-10-27T09:00:00+08:00",
+      senderName: "成员",
+      isFromMe: false,
+      text: "发布窗口改为今晚",
+    }],
+  }],
+  chatCount: 1,
+  messageCount: 4,
+  processedMessages: 4,
+  totalSegments: 1,
+  completedSegments: 1,
+  failedSegments: 0,
+  complete: true,
+  cancelled: false,
+  cached: false,
+};
+
+describe("event review", () => {
+  it("routes an exact date recap to event review and opens a real source", async () => {
+    mocks.api.reviewGroupEvents.mockResolvedValue(reviewResult);
+    mocks.api.messageContext.mockResolvedValue([
+      { localId: 1, occurredAt: reviewResult.events[0].startAt, senderName: "成员", isFromMe: false, kind: "text", text: "发布窗口改为今晚" },
+    ]);
+    renderAsk();
+    await act(async () => {});
+
+    fireEvent.change(screen.getByLabelText("输入问题"), { target: { value: "2026-10-27发生了什么" } });
+    fireEvent.click(screen.getByRole("button", { name: "提问" }));
+
+    expect(await screen.findByText("已识别日期 2026年10月27日，已切换到事件回顾")).toBeVisible();
+    expect(screen.getByRole("tab", { name: /事件回顾/ })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText("发布窗口调整")).toBeVisible();
+    expect(mocks.api.ask).not.toHaveBeenCalled();
+    expect(mocks.api.reviewGroupEvents).toHaveBeenCalledWith("a", "2026-10-27", undefined, expect.any(String), "generate", false);
+
+    fireEvent.click(screen.getByRole("button", { name: /查看原话/ }));
+    expect(await screen.findByText("发布窗口改为今晚")).toBeVisible();
+  });
+
+  it("routes a private-chat recap to that chat instead of all chats", async () => {
+    mocks.api.reviewGroupEvents.mockResolvedValue({
+      ...reviewResult,
+      scope: "alice",
+      chatCount: 1,
+      events: [{
+        ...reviewResult.events[0],
+        id: "alice:7:约拍照",
+        title: "约周末拍照",
+        sourceRefs: [{
+          chatId: "alice",
+          chatName: "小艾",
+          chatKind: "direct",
+          localId: 7,
+          occurredAt: hit.occurredAt,
+          senderName: "小艾",
+          isFromMe: false,
+          text: "周末一起去公园拍照",
+        }],
+      }],
+    });
+    renderAsk();
+    await act(async () => {});
+    fireEvent.change(screen.getByLabelText("搜索范围"), { target: { value: "alice" } });
+    fireEvent.change(screen.getByLabelText("输入问题"), { target: { value: "2026-10-27发生了什么" } });
+    fireEvent.click(screen.getByRole("button", { name: "提问" }));
+    expect(await screen.findByText("已识别日期 2026年10月27日，已切换到事件回顾")).toBeVisible();
+    expect(await screen.findByText("约周末拍照")).toBeVisible();
+    expect(mocks.api.ask).not.toHaveBeenCalled();
+    expect(mocks.api.reviewGroupEvents).toHaveBeenCalledWith("a", "2026-10-27", "alice", expect.any(String), "generate", false);
+  });
+
+  it("lists private chats in the review scope", async () => {
+    renderAsk();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("tab", { name: /事件回顾/ }));
+    const scope = screen.getByLabelText("分析范围");
+    expect(scope).toHaveDisplayValue("全部聊天");
+    fireEvent.change(scope, { target: { value: "alice" } });
+    expect(scope).toHaveValue("alice");
+    expect(screen.getByRole("option", { name: "小艾" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "产品群" })).toBeInTheDocument();
+  });
+
+  it("shows an empty-message state without calling the model", async () => {
+    mocks.api.eventReviewEstimate.mockResolvedValue({ date: "2026-10-27", chatCount: 0, messageCount: 0, chars: 0, segmentCount: 0 });
+    renderAsk();
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("tab", { name: /事件回顾/ }));
+    fireEvent.change(screen.getByLabelText("回顾日期"), { target: { value: "2026-10-27" } });
+    await act(async () => {});
+    fireEvent.click(screen.getByRole("button", { name: "开始分析" }));
+    expect(await screen.findByText("这一天没有可分析的聊天文本")).toBeVisible();
+    expect(mocks.api.reviewGroupEvents).not.toHaveBeenCalled();
+  });
+
+  it("keeps a factual dated question in ordinary ask", async () => {
+    mocks.api.ask.mockResolvedValue({ answer: "小王处理了接口", sources: [] });
+    renderAsk();
+    await act(async () => {});
+    fireEvent.change(screen.getByLabelText("输入问题"), { target: { value: "2026年10月27日谁处理了接口问题" } });
+    fireEvent.click(screen.getByRole("button", { name: "提问" }));
+    expect(await screen.findByText("小王处理了接口")).toBeVisible();
+    expect(mocks.api.reviewGroupEvents).not.toHaveBeenCalled();
   });
 });

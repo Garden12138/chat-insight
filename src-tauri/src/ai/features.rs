@@ -1,4 +1,5 @@
 use super::client::{cancelled, ChatMessage, LlmClient};
+use super::dates::{format_ymd, intersect_range, parse_exact_date};
 use super::indexer::speaker;
 use super::retrieval::{dot, retrieve, AskSource};
 use super::store::TextMessage;
@@ -8,6 +9,7 @@ use crate::database::Database;
 use crate::error::{AppError, AppResult};
 use crate::insights::YearInsights;
 use crate::models::DateRange;
+use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -49,6 +51,7 @@ pub struct AskResult {
 }
 
 pub const NOTHING_FOUND: &str = "没有在聊天记录中找到和这个问题相关的内容。可以换个说法、调整日期范围，或先在“数据管理 → AI 设置”中建立语义索引。";
+pub const DATE_RANGE_EMPTY: &str = "问题中的日期与顶部日期范围没有交集，没有可检索的聊天。";
 
 pub fn ask_prompt(question: &str, sources: &[AskSource], today: &str) -> Vec<ChatMessage> {
     let context = sources
@@ -96,13 +99,29 @@ pub fn ask(
         return Err(AppError::Validation("请输入问题".into()));
     }
     sink.status("正在检索相关聊天…");
+    let search_range = match NaiveDate::parse_from_str(today, "%Y-%m-%d")
+        .ok()
+        .and_then(|today| parse_exact_date(question, today))
+    {
+        Some(date) => match intersect_range(range, &format_ymd(date)) {
+            Some(narrowed) => narrowed,
+            None => {
+                sink.delta(DATE_RANGE_EMPTY);
+                return Ok(AskResult {
+                    answer: DATE_RANGE_EMPTY.into(),
+                    sources: Vec::new(),
+                });
+            }
+        },
+        None => range.clone(),
+    };
     let sources = retrieve(
         db,
         client,
         account_id,
         question,
         chat_id,
-        range,
+        &search_range,
         ASK_SOURCES,
     )?;
     if sources.is_empty() {
@@ -778,6 +797,73 @@ mod tests {
         .unwrap();
         assert_eq!(result.answer, NOTHING_FOUND);
         assert!(client.prompts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn exact_date_is_a_hard_filter_for_ordinary_ask() {
+        let db = seeded_db(&["周末一起去公园拍照", "下周去日本旅游，机票订好了"]);
+        let client = FakeClient::new(&["当天只提到了公园 [1]"]);
+        let result = ask(
+            &db,
+            &client,
+            &NullSink,
+            "account",
+            "2026年8月1日公园是谁提的",
+            None,
+            &DateRange {
+                from: Some("2026-08-01".into()),
+                to: Some("2026-08-31".into()),
+            },
+            "2026-10-29",
+        )
+        .unwrap();
+        assert_eq!(result.sources.len(), 1);
+        assert!(result.sources[0].text.contains("公园"));
+        assert!(!result.sources[0].text.contains("日本"));
+    }
+
+    #[test]
+    fn empty_date_intersection_does_not_fall_back() {
+        let db = seeded_db(&["周末一起去公园拍照"]);
+        let client = FakeClient::new(&["不应该被调用"]);
+        let result = ask(
+            &db,
+            &client,
+            &NullSink,
+            "account",
+            "2026-10-27谁去了公园",
+            None,
+            &DateRange {
+                from: Some("2026-01-01".into()),
+                to: Some("2026-01-31".into()),
+            },
+            "2026-10-29",
+        )
+        .unwrap();
+        assert_eq!(result.answer, DATE_RANGE_EMPTY);
+        assert!(result.sources.is_empty());
+        assert!(client.prompts.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn yearless_date_does_not_constrain_ask() {
+        let db = seeded_db(&["周末一起去公园拍照", "下周去日本旅游，机票订好了"]);
+        let client = FakeClient::new(&["提到了日本 [1]"]);
+        let result = ask(
+            &db,
+            &client,
+            &NullSink,
+            "account",
+            "8月2日我们什么时候去日本？",
+            None,
+            &DateRange::default(),
+            "2026-10-29",
+        )
+        .unwrap();
+        assert!(result
+            .sources
+            .iter()
+            .any(|source| source.text.contains("日本")));
     }
 
     #[test]

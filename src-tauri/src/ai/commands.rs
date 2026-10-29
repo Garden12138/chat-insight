@@ -1,6 +1,7 @@
 use super::client::LlmClient;
 use super::commitments::{self, ScanEstimate, ScanOutcome};
 use super::decisions;
+use super::events::{self, EventReviewEstimate, EventReviewResult};
 use super::features::{self, AskResult, ReportResult, SummaryResult, TopicsResult};
 use super::indexer::{self, IndexOutcome, IndexProgress};
 use super::settings::{AiSettingsInput, AiSettingsView};
@@ -97,12 +98,22 @@ pub fn ai_save_settings(
     ai.settings.save(input).map_err(public_error)
 }
 
+/// Read-only routing metadata for the consent UI; never sends chat text or invokes a model.
+#[tauri::command]
+pub async fn ai_xcli_privacy(
+    ai: State<'_, AiState>,
+) -> Result<Option<super::client::GatewayPrivacy>, String> {
+    let (_, client) = ai.client();
+    blocking(move || client.gateway_privacy()).await
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiTestResult {
     pub models: Vec<String>,
     pub chat_model_found: bool,
     pub embedding_dimension: usize,
+    pub gateway: Option<super::client::GatewayPrivacy>,
 }
 
 fn model_listed(models: &[String], wanted: &str) -> bool {
@@ -116,22 +127,24 @@ fn model_listed(models: &[String], wanted: &str) -> bool {
 #[tauri::command]
 pub async fn ai_test_connection(ai: State<'_, AiState>) -> Result<AiTestResult, String> {
     let (settings, client) = ai.client();
-    if !settings.is_local() && !settings.allow_cloud {
+    let client = client.with_cloud_consent(settings.allow_cloud);
+    if settings.provider != super::settings::AiProvider::Xcli
+        && !settings.is_local()
+        && !settings.allow_cloud
+    {
         return Err(
             "模型服务地址不在本机。如需使用云端服务，请先勾选“允许使用云端模型服务”".into(),
         );
     }
     blocking(move || {
+        let gateway = client.gateway_privacy()?;
         let models = client.list_models().unwrap_or_default();
-        let embedding_dimension = client
-            .embed(&["连接测试".to_string()])?
-            .first()
-            .map(Vec::len)
-            .unwrap_or(0);
+        let embedding_dimension = client.test_embedding_dimension()?;
         Ok(AiTestResult {
             chat_model_found: models.is_empty() || model_listed(&models, &settings.chat_model),
             embedding_dimension,
             models,
+            gateway,
         })
     })
     .await
@@ -152,10 +165,11 @@ pub fn ai_index_status(
     ai: State<'_, AiState>,
     account_id: String,
 ) -> Result<AiIndexStatus, String> {
-    let model = ai.settings.load().embed_model;
+    let (settings, client) = ai.client();
+    let model = settings.embed_model;
     let counts = state
         .database
-        .ai_index_counts(&account_id, None, &model)
+        .ai_index_counts(&account_id, None, client.embed_model())
         .map_err(public_error)?;
     Ok(AiIndexStatus {
         model,
@@ -173,7 +187,7 @@ pub async fn ai_build_index(
     rebuild: bool,
     cloud_consent: bool,
 ) -> Result<IndexOutcome, String> {
-    let (settings, client) = ai.client();
+    let (settings, mut client) = ai.client_with_consent(cloud_consent);
     settings
         .ensure_allowed(true, cloud_consent)
         .map_err(public_error)?;
@@ -181,11 +195,15 @@ pub async fn ai_build_index(
     ai.index_cancel.store(false, Ordering::SeqCst);
     let cancel = Arc::clone(&ai.index_cancel);
     let database = state.database.clone();
+    let settings_store = ai.settings.clone();
     let emit = move |progress: IndexProgress| {
         let _ = app.emit("ai-index-progress", progress);
     };
     blocking(move || {
         let _lock = lock;
+        if let Some(identity) = client.prepare_index(rebuild)? {
+            settings_store.accept_embedding_identity(&identity)?;
+        }
         if rebuild {
             database.ai_clear_index(&account_id, client.embed_model())?;
         }
@@ -280,7 +298,7 @@ pub async fn ai_ask(
     request_id: String,
     cloud_consent: bool,
 ) -> Result<AskResult, String> {
-    let (settings, client) = ai.client();
+    let (settings, client) = ai.client_with_consent(cloud_consent);
     settings
         .ensure_allowed(true, cloud_consent)
         .map_err(public_error)?;
@@ -302,6 +320,87 @@ pub async fn ai_ask(
     .await
 }
 
+#[tauri::command]
+pub fn ai_event_review_estimate(
+    state: State<'_, AppState>,
+    account_id: String,
+    date: String,
+    chat_id: Option<String>,
+) -> Result<EventReviewEstimate, String> {
+    events::estimate_review(&state.database, &account_id, &date, chat_id.as_deref())
+        .map_err(public_error)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[tauri::command]
+pub async fn ai_review_group_events(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    ai: State<'_, AiState>,
+    account_id: String,
+    date: String,
+    chat_id: Option<String>,
+    request_id: String,
+    mode: String,
+    cloud_consent: bool,
+) -> Result<EventReviewResult, String> {
+    let (read_cache, generate) = cache_mode(&mode).map_err(public_error)?;
+    let (settings, client) = ai.client_with_consent(cloud_consent);
+    let scope = events::event_review_scope(chat_id.as_deref());
+    let range = crate::models::DateRange {
+        from: Some(date.clone()),
+        to: Some(date.clone()),
+    };
+    let key = CacheKey {
+        account_id: &account_id,
+        kind: "event_review",
+        scope: &scope,
+        range: &range,
+        model: &settings.chat_model,
+    };
+    let fingerprint = state
+        .database
+        .ai_group_event_fingerprint(&account_id, &date, chat_id.as_deref())
+        .map_err(public_error)?;
+    if read_cache {
+        let hit = cached(
+            &state,
+            &key,
+            &fingerprint,
+            |value: &mut EventReviewResult, created_at| {
+                value.cached = true;
+                value.generated_at = Some(created_at);
+            },
+        )
+        .map_err(public_error)?;
+        if hit.is_some() || !generate {
+            return hit.ok_or_else(|| "没有可用的事件回顾缓存".to_string());
+        }
+    }
+    settings
+        .ensure_allowed(true, cloud_consent)
+        .map_err(public_error)?;
+    let sink = ai.stream(&app, &request_id);
+    let database = state.database.clone();
+    let (task_account, task_date, task_chat) = (account_id.clone(), date.clone(), chat_id.clone());
+    let mut result = blocking(move || {
+        events::review_group_events(
+            &database,
+            &client,
+            &sink,
+            &task_account,
+            &task_date,
+            task_chat.as_deref(),
+        )
+    })
+    .await?;
+    if events::should_cache(&result) {
+        result.generated_at =
+            Some(store(&state, &key, &fingerprint, &result).map_err(public_error)?);
+    }
+    Ok(result)
+}
+
 #[allow(clippy::too_many_arguments)]
 #[tauri::command]
 pub async fn ai_summarize_chat(
@@ -316,7 +415,7 @@ pub async fn ai_summarize_chat(
     cloud_consent: bool,
 ) -> Result<Option<SummaryResult>, String> {
     let (read_cache, generate) = cache_mode(&mode).map_err(public_error)?;
-    let (settings, client) = ai.client();
+    let (settings, client) = ai.client_with_consent(cloud_consent);
     let key = CacheKey {
         account_id: &account_id,
         kind: "summary",
@@ -380,8 +479,8 @@ pub async fn ai_chat_topics(
     cloud_consent: bool,
 ) -> Result<Option<TopicsResult>, String> {
     let (read_cache, generate) = cache_mode(&mode).map_err(public_error)?;
-    let (settings, client) = ai.client();
-    let model = format!("{}|{}", settings.chat_model, settings.embed_model);
+    let (settings, client) = ai.client_with_consent(cloud_consent);
+    let model = format!("{}|{}", settings.chat_model, client.embed_model());
     let key = CacheKey {
         account_id: &account_id,
         kind: "topics",
@@ -478,6 +577,7 @@ pub async fn ai_year_report(
 ) -> Result<Option<ReportResult>, String> {
     let (read_cache, generate) = cache_mode(&mode).map_err(public_error)?;
     let (settings, client) = ai.client();
+    let client = client.with_cloud_consent(settings.allow_cloud);
     let range = DateRange {
         from: Some(format!("{year}-01-01")),
         to: Some(format!("{year}-12-31")),
@@ -557,7 +657,7 @@ pub async fn ai_scan_commitments(
     request_id: String,
     cloud_consent: bool,
 ) -> Result<ScanOutcome, String> {
-    let (settings, client) = ai.client();
+    let (settings, client) = ai.client_with_consent(cloud_consent);
     settings
         .ensure_allowed(true, cloud_consent)
         .map_err(public_error)?;
@@ -607,7 +707,7 @@ pub async fn ai_scan_decisions(
     request_id: String,
     cloud_consent: bool,
 ) -> Result<ScanOutcome, String> {
-    let (settings, client) = ai.client();
+    let (settings, client) = ai.client_with_consent(cloud_consent);
     settings
         .ensure_allowed(true, cloud_consent)
         .map_err(public_error)?;

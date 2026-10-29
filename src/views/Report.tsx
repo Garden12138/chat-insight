@@ -111,7 +111,7 @@ export function Report({ accountId, revision, onOpenDetail, onOpenSettings }: Re
 
   const aiBody = !settings.enabled ? (
     <div className="ai-panel-hint">
-      <p>开启 AI 后，可以根据这一年的统计数据写一份年度聊天回顾。只发送统计数字，不发送任何聊天内容。</p>
+      <p>开启 AI 后，可以根据本页数字写一份年度回顾。</p>
       <button type="button" className="secondary-button compact" onClick={onOpenSettings}>前往 AI 设置</button>
     </div>
   ) : running ? (
@@ -119,11 +119,11 @@ export function Report({ accountId, revision, onOpenDetail, onOpenSettings }: Re
   ) : report ? (
     <>
       <Markdown text={report.text} />
-      <p className="ai-meta">{report.anonymized ? "联系人名称以代号发送给模型 · " : ""}{report.generatedAt ? `生成于 ${formatDateTime(report.generatedAt)}` : ""}</p>
+      {report.generatedAt && <p className="ai-meta">生成于 {formatDateTime(report.generatedAt)}</p>}
     </>
   ) : text ? (
     <><Markdown text={text} /><p className="ai-meta">已停止生成</p></>
-  ) : <p className="ai-panel-hint">AI 只会读取本页的统计数字（消息数、时段、聊天对象排行等），不会读取任何聊天内容。生成期间可以切换到其他页面。</p>;
+  ) : <p className="ai-panel-hint">根据本页数字生成一段叙述。</p>;
 
   return (
     <div className="view-content report-view">

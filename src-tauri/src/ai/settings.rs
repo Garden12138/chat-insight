@@ -5,10 +5,23 @@ use std::fs;
 use std::path::PathBuf;
 
 pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:11434/v1";
+pub const BAILIAN_BASE_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+pub const BAILIAN_CHAT_MODEL: &str = "qwen-plus";
+pub const BAILIAN_EMBED_MODEL: &str = "text-embedding-v3";
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiProvider {
+    #[default]
+    OpenaiCompatible,
+    Bailian,
+    Xcli,
+}
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct AiSettings {
+    pub provider: AiProvider,
     pub enabled: bool,
     pub base_url: String,
     pub chat_model: String,
@@ -22,6 +35,7 @@ pub struct AiSettings {
 impl Default for AiSettings {
     fn default() -> Self {
         Self {
+            provider: AiProvider::OpenaiCompatible,
             enabled: false,
             base_url: DEFAULT_BASE_URL.into(),
             chat_model: "qwen3:8b".into(),
@@ -34,7 +48,9 @@ impl Default for AiSettings {
 
 impl AiSettings {
     pub fn is_local(&self) -> bool {
-        is_local_endpoint(&self.base_url)
+        // Named cloud vendors are never local. Gateway locality is decided at send time.
+        !matches!(self.provider, AiProvider::Bailian | AiProvider::Xcli)
+            && is_local_endpoint(&self.base_url)
     }
 
     /// Rejects requests the user has not allowed. `sends_content` marks requests that
@@ -44,6 +60,9 @@ impl AiSettings {
             return Err(AppError::Ai(
                 "AI 功能尚未开启，请先在“数据管理 → AI 设置”中开启".into(),
             ));
+        }
+        if self.provider == AiProvider::Xcli {
+            return Ok(());
         }
         if self.is_local() {
             return Ok(());
@@ -113,6 +132,22 @@ impl SettingsStore {
             .filter(|key| !key.is_empty())
     }
 
+    pub fn embedding_identity(&self) -> Option<super::gateway::EmbeddingIdentity> {
+        fs::read(self.dir.join("xcli-embedding-identity.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+    }
+
+    pub fn accept_embedding_identity(
+        &self,
+        identity: &super::gateway::EmbeddingIdentity,
+    ) -> AppResult<()> {
+        write_private_file(
+            &self.dir.join("xcli-embedding-identity.json"),
+            &serde_json::to_vec(identity)?,
+        )
+    }
+
     pub fn view(&self) -> AiSettingsView {
         let settings = self.load();
         AiSettingsView {
@@ -125,9 +160,34 @@ impl SettingsStore {
 
     pub fn save(&self, input: AiSettingsInput) -> AppResult<AiSettingsView> {
         let mut settings = input.settings;
+        let previous = self.load();
+        if settings.provider != previous.provider
+            && vendor_switch_needs_new_key(previous.provider, settings.provider)
+            && input.api_key.is_none()
+            && self.api_key().is_some()
+        {
+            return Err(AppError::Validation(
+                "切换云端服务商需要重新填写 API Key，不能复用其他供应商凭据".into(),
+            ));
+        }
         settings.base_url = settings.base_url.trim().trim_end_matches('/').to_string();
         settings.chat_model = settings.chat_model.trim().to_string();
         settings.embed_model = settings.embed_model.trim().to_string();
+        if settings.provider == AiProvider::Bailian {
+            if settings.base_url.is_empty() {
+                settings.base_url = BAILIAN_BASE_URL.into();
+            }
+            settings.allow_cloud = true;
+            if settings.chat_model.is_empty() {
+                settings.chat_model = BAILIAN_CHAT_MODEL.into();
+            }
+            if settings.embed_model.is_empty() {
+                settings.embed_model = BAILIAN_EMBED_MODEL.into();
+            }
+        }
+        if settings.provider == AiProvider::Xcli {
+            settings.base_url = super::gateway::endpoint(&settings.base_url)?;
+        }
         if !(settings.base_url.starts_with("http://") || settings.base_url.starts_with("https://"))
             || endpoint_host(&settings.base_url).is_none()
         {
@@ -137,6 +197,16 @@ impl SettingsStore {
         }
         if settings.chat_model.is_empty() || settings.embed_model.is_empty() {
             return Err(AppError::Validation("请填写对话模型和向量模型".into()));
+        }
+        let next_key = match input.api_key.as_deref().map(str::trim) {
+            Some("") => None,
+            Some(key) => Some(key.to_string()),
+            None => self.api_key(),
+        };
+        if settings.provider == AiProvider::Bailian && settings.enabled && next_key.is_none() {
+            return Err(AppError::Validation(
+                "使用阿里云百炼需要填写 API Key".into(),
+            ));
         }
         settings.auto_scan_commitments &= settings.is_local();
         write_private_file(
@@ -171,6 +241,17 @@ pub fn endpoint_host(url: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
+fn vendor_switch_needs_new_key(previous: AiProvider, next: AiProvider) -> bool {
+    previous != next
+        && matches!(
+            (previous, next),
+            (AiProvider::Bailian, _)
+                | (_, AiProvider::Bailian)
+                | (AiProvider::Xcli, _)
+                | (_, AiProvider::Xcli)
+        )
+}
+
 pub fn is_local_endpoint(url: &str) -> bool {
     matches!(
         endpoint_host(url).as_deref(),
@@ -182,6 +263,111 @@ pub fn is_local_endpoint(url: &str) -> bool {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn xcli_settings_do_not_reuse_provider_keys_or_enable_background_cloud_upload() {
+        let temporary = tempdir().unwrap();
+        let store = SettingsStore::new(temporary.path().join("ai"));
+        store
+            .save(AiSettingsInput {
+                settings: AiSettings::default(),
+                api_key: Some("old-provider-canary".into()),
+            })
+            .unwrap();
+        let gateway = AiSettings {
+            provider: AiProvider::Xcli,
+            enabled: true,
+            base_url: "http://127.0.0.1:18741/v1".into(),
+            chat_model: "xcli/text-default".into(),
+            embed_model: "xcli/embed-default".into(),
+            auto_scan_commitments: true,
+            ..AiSettings::default()
+        };
+        assert!(store
+            .save(AiSettingsInput {
+                settings: gateway.clone(),
+                api_key: None
+            })
+            .is_err());
+        assert_eq!(store.load().provider, AiProvider::OpenaiCompatible);
+        assert_eq!(store.api_key().as_deref(), Some("old-provider-canary"));
+        let view = store
+            .save(AiSettingsInput {
+                settings: gateway,
+                api_key: Some("independent-gateway-token".into()),
+            })
+            .unwrap();
+        assert!(!view.is_local);
+        assert!(!view.settings.auto_scan_commitments);
+        assert!(!serde_json::to_string(&view)
+            .unwrap()
+            .contains("independent-gateway-token"));
+        let identity = super::super::gateway::EmbeddingIdentity {
+            endpoint: "http://127.0.0.1:18741/v1".into(),
+            alias: "xcli/embed-default".into(),
+            dimensions: 3,
+            version: "v1".into(),
+            fingerprint: "a".repeat(64),
+        };
+        assert!(store.embedding_identity().is_none());
+        store.accept_embedding_identity(&identity).unwrap();
+        assert_eq!(store.embedding_identity(), Some(identity));
+    }
+
+    #[test]
+    fn bailian_keeps_namespace_endpoint_and_requires_its_own_key() {
+        let temporary = tempdir().unwrap();
+        let store = SettingsStore::new(temporary.path().join("ai"));
+        store
+            .save(AiSettingsInput {
+                settings: AiSettings::default(),
+                api_key: Some("old-provider-canary".into()),
+            })
+            .unwrap();
+        let namespace = "https://llm-demo.cn-beijing.maas.aliyuncs.com/compatible-mode/v1";
+        let bailian = AiSettings {
+            provider: AiProvider::Bailian,
+            enabled: true,
+            base_url: namespace.into(),
+            chat_model: BAILIAN_CHAT_MODEL.into(),
+            embed_model: BAILIAN_EMBED_MODEL.into(),
+            allow_cloud: false,
+            auto_scan_commitments: true,
+        };
+        assert!(store
+            .save(AiSettingsInput {
+                settings: bailian.clone(),
+                api_key: None
+            })
+            .is_err());
+        let view = store
+            .save(AiSettingsInput {
+                settings: bailian,
+                api_key: Some("sk-bailian".into()),
+            })
+            .unwrap();
+        assert_eq!(view.settings.base_url, namespace);
+        assert!(view.settings.allow_cloud);
+        assert!(!view.is_local);
+        assert!(!view.settings.auto_scan_commitments);
+        assert_eq!(view.host, "llm-demo.cn-beijing.maas.aliyuncs.com");
+        assert_eq!(store.api_key().as_deref(), Some("sk-bailian"));
+        let defaulted = store
+            .save(AiSettingsInput {
+                settings: AiSettings {
+                    provider: AiProvider::Bailian,
+                    enabled: true,
+                    base_url: String::new(),
+                    chat_model: BAILIAN_CHAT_MODEL.into(),
+                    embed_model: BAILIAN_EMBED_MODEL.into(),
+                    allow_cloud: true,
+                    auto_scan_commitments: false,
+                },
+                api_key: Some("sk-bailian".into()),
+            })
+            .unwrap();
+        assert_eq!(defaulted.settings.base_url, BAILIAN_BASE_URL);
+    }
 
     #[test]
     fn recognizes_loopback_endpoints_only() {
@@ -208,6 +394,13 @@ mod tests {
         settings.base_url = "https://api.example.com/v1".into();
         assert!(settings.ensure_allowed(false, true).is_err());
         settings.allow_cloud = true;
+        assert!(settings.ensure_allowed(false, false).is_ok());
+        assert!(settings.ensure_allowed(true, false).is_err());
+        assert!(settings.ensure_allowed(true, true).is_ok());
+
+        settings.provider = AiProvider::Bailian;
+        settings.base_url = BAILIAN_BASE_URL.into();
+        assert!(!settings.is_local());
         assert!(settings.ensure_allowed(false, false).is_ok());
         assert!(settings.ensure_allowed(true, false).is_err());
         assert!(settings.ensure_allowed(true, true).is_ok());

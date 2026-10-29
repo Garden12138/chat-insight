@@ -105,7 +105,8 @@ pub fn chunk_messages(messages: &[TextMessage]) -> Vec<ChunkDraft> {
         let line = message_line(message);
         let line_chars = line.chars().count();
         if let Some(previous) = group.last() {
-            if minutes_between(&previous.occurred_at, &message.occurred_at) > GAP_MINUTES
+            if previous.local_date != message.local_date
+                || minutes_between(&previous.occurred_at, &message.occurred_at) > GAP_MINUTES
                 || group.len() >= MAX_MESSAGES
                 || chars + line_chars > MAX_CHARS
             {
@@ -141,6 +142,7 @@ pub fn index_chat(
     cancel: &AtomicBool,
     on_batch: &mut dyn FnMut(usize),
 ) -> AppResult<usize> {
+    client.validate_embed_model()?;
     let model = client.embed_model();
     let cursor = db.ai_cursor(account_id, chat_id, model)?;
     let messages = db.ai_text_messages(account_id, chat_id, &DateRange::default(), cursor)?;
@@ -178,6 +180,7 @@ pub fn build_index(
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(IndexProgress),
 ) -> AppResult<IndexOutcome> {
+    client.validate_embed_model()?;
     let chats = db.ai_chats_to_index(account_id, client.embed_model())?;
     let total = chats.len();
     let mut chunks = 0usize;
@@ -268,6 +271,32 @@ mod tests {
         let long = "很长的消息".repeat(60);
         messages = vec![text(1, 0, false, &long), text(2, 0, false, &long)];
         assert_eq!(chunk_messages(&messages).len(), 2);
+    }
+
+    #[test]
+    fn does_not_mix_local_dates_in_one_chunk() {
+        let late = TextMessage {
+            local_id: 1,
+            occurred_at: "2026-10-27T23:50:00+08:00".into(),
+            local_date: "2026-10-27".into(),
+            sender_name: "小艾".into(),
+            is_from_me: false,
+            text: "今天先这样，明天继续对齐发布窗口".into(),
+        };
+        let early = TextMessage {
+            local_id: 2,
+            occurred_at: "2026-10-28T00:10:00+08:00".into(),
+            local_date: "2026-10-28".into(),
+            sender_name: "我".into(),
+            is_from_me: true,
+            text: "好的，明天上午把清单发群里".into(),
+        };
+        let chunks = chunk_messages(&[late, early]);
+        assert_eq!(chunks.len(), 2);
+        assert!(chunks
+            .iter()
+            .all(|chunk| chunk.local_date == "2026-10-27" || chunk.local_date == "2026-10-28"));
+        assert_ne!(chunks[0].local_date, chunks[1].local_date);
     }
 
     #[test]
