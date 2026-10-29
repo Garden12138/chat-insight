@@ -1,5 +1,6 @@
 import { guideTarget } from "../guide";
 import type { DateRange, RangePreset } from "../types";
+import { DateField } from "./DateField";
 
 interface DateRangePickerProps {
   preset: RangePreset;
@@ -27,9 +28,9 @@ export function DateRangePicker({ preset, range, onPresetChange, onRangeChange }
       </div>
       {preset === "custom" && (
         <div className="custom-range">
-          <input aria-label="开始日期" type="date" value={range.from ?? ""} onChange={(event) => onRangeChange({ ...range, from: event.target.value || undefined })} />
+          <DateField label="开始日期" value={range.from ?? ""} onChange={(value) => onRangeChange({ ...range, from: value })} />
           <span>至</span>
-          <input aria-label="结束日期" type="date" value={range.to ?? ""} onChange={(event) => onRangeChange({ ...range, to: event.target.value || undefined })} />
+          <DateField label="结束日期" value={range.to ?? ""} onChange={(value) => onRangeChange({ ...range, to: value })} />
         </div>
       )}
     </div>

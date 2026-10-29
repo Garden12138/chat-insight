@@ -13,6 +13,7 @@ interface TopicsPanelProps {
   range: DateRange;
   revision: number;
   keywords: KeywordCount[];
+  suspendAutoAi?: boolean;
 }
 
 function KeywordCloud({ keywords }: { keywords: KeywordCount[] }) {
@@ -28,7 +29,7 @@ function monthLabel(value: string) {
   return value ? formatDateTime(value).replace(/\s.*$/, "") : "";
 }
 
-export function TopicsPanel({ accountId, chatId, chatName, range, revision, keywords }: TopicsPanelProps) {
+export function TopicsPanel({ accountId, chatId, chatName, range, revision, keywords, suspendAutoAi = false }: TopicsPanelProps) {
   const { settings, confirmCloud } = useAi();
   const key = `topics:${accountId}:${chatId}:${range.from ?? ""}:${range.to ?? ""}`;
   const { status, running, result, error } = useAiTask<TopicsResult>(key);
@@ -36,13 +37,13 @@ export function TopicsPanel({ accountId, chatId, chatName, range, revision, keyw
 
   useEffect(() => {
     setShowKeywords(false);
-    if (!settings.enabled || getAiTask(key).running) return;
+    if (suspendAutoAi || !settings.enabled || getAiTask(key).running) return;
     let active = true;
     api.chatTopics(accountId, chatId, range, newRequestId(), "cached")
       .then((value) => { if (active) setAiTaskResult(key, value ?? undefined); })
       .catch(() => undefined);
     return () => { active = false; };
-  }, [key, accountId, chatId, range, revision, settings.enabled, settings.chatModel, settings.embedModel]);
+  }, [key, accountId, chatId, range, revision, settings.enabled, settings.chatModel, settings.embedModel, suspendAutoAi]);
 
   async function analyze(mode: "generate" | "refresh") {
     let detail = `“${chatName}”里还没建立索引的消息，以及归纳时用到的聊天摘录。`;

@@ -71,6 +71,16 @@ export interface ChatListItem {
   lastMessageAt?: string;
 }
 
+export interface ChatFootprintEntry {
+  localDate: string;
+  chatId: string;
+  displayName: string;
+  chatKind: string;
+  messageCount: number;
+  firstMessageAt: string;
+  lastMessageAt: string;
+}
+
 export interface KeywordCount {
   word: string;
   count: number;

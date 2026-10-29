@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { EChartsOption } from "echarts";
 import { api } from "../api";
 import type { ChatDetailData, ChatListItem, DateRange } from "../types";
@@ -20,12 +20,15 @@ interface ChatDetailProps {
   range: DateRange;
   revision: number;
   requestedChatId?: string;
+  focusTimeline?: boolean;
+  suspendAutoAi?: boolean;
+  onReleaseFocus?: () => void;
   onOpenCommitments: () => void;
 }
 
 const { axis: axisColor, grid: lineColor } = chartTheme;
 
-export function ChatDetail({ accountId, range, revision, requestedChatId, onOpenCommitments }: ChatDetailProps) {
+export function ChatDetail({ accountId, range, revision, requestedChatId, focusTimeline = false, suspendAutoAi = false, onReleaseFocus, onOpenCommitments }: ChatDetailProps) {
   const [search, setSearch] = useState("");
   const [chats, setChats] = useState<ChatListItem[]>([]);
   const [selectedId, setSelectedId] = useState(requestedChatId ?? "");
@@ -34,7 +37,10 @@ export function ChatDetail({ accountId, range, revision, requestedChatId, onOpen
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [viewerIndex, setViewerIndex] = useState<number>();
+  const timelineRef = useRef<HTMLElement>(null);
+  const focusedChat = useRef(requestedChatId);
   const mediaMessages = useMemo(() => detail?.messages.filter((message) => isMediaKind(message.kind)) ?? [], [detail]);
+  const scrollKey = focusTimeline && !loading && detail ? `${selectedId}:${detail.messages[0]?.localId ?? "empty"}` : "";
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -45,6 +51,22 @@ export function ChatDetail({ accountId, range, revision, requestedChatId, onOpen
     }, 180);
     return () => window.clearTimeout(timer);
   }, [accountId, search, requestedChatId, revision]);
+
+  useEffect(() => {
+    if (!requestedChatId) return;
+    focusedChat.current = requestedChatId;
+    setSelectedId(requestedChatId);
+  }, [requestedChatId]);
+
+  useEffect(() => {
+    if (!scrollKey) return;
+    timelineRef.current?.scrollIntoView({ block: "start" });
+  }, [scrollKey]);
+
+  function chooseChat(chatId: string) {
+    if (focusTimeline && chatId !== focusedChat.current) onReleaseFocus?.();
+    setSelectedId(chatId);
+  }
 
   useEffect(() => {
     if (!selectedId) { setLoading(false); return; }
@@ -94,7 +116,7 @@ export function ChatDetail({ accountId, range, revision, requestedChatId, onOpen
         <div className="search-box"><Icon name="search" /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="搜索好友或群聊" aria-label="搜索聊天" /></div>
         <div className="chat-list">
           {chats.map((chat) => (
-            <button key={chat.id} className={selectedId === chat.id ? "selected" : ""} onClick={() => setSelectedId(chat.id)}>
+            <button key={chat.id} className={selectedId === chat.id ? "selected" : ""} onClick={() => chooseChat(chat.id)}>
               <span className={`avatar ${chat.chatKind}`}>{chat.displayName.slice(0, 1).toUpperCase()}</span>
               <span><strong>{chat.displayName}</strong><small>{formatCount(chat.messageCount)} 条 · {chat.chatKind === "group" ? "群聊" : "好友"}</small></span>
             </button>
@@ -114,7 +136,7 @@ export function ChatDetail({ accountId, range, revision, requestedChatId, onOpen
               <div className="detail-totals"><span><strong>{formatCount(detail.totalMessages)}</strong>条消息</span><span><strong>{detail.totalMessages ? Math.round((detail.sentMessages / detail.totalMessages) * 100) : 0}%</strong>由我发送</span></div>
             </header>
 
-            <AiSummaryPanel accountId={accountId} chatId={detail.chat.id} chatName={detail.chat.displayName} range={range} revision={revision} />
+            <AiSummaryPanel accountId={accountId} chatId={detail.chat.id} chatName={detail.chat.displayName} range={range} revision={revision} suspendAutoAi={suspendAutoAi} />
             <ChatMemoryPanel accountId={accountId} chatId={detail.chat.id} chatName={detail.chat.displayName} chatKind={detail.chat.chatKind} range={range} revision={revision} onOpenDetail={() => undefined} onOpenCommitments={onOpenCommitments} />
 
             <div className="detail-charts">
@@ -122,9 +144,9 @@ export function ChatDetail({ accountId, range, revision, requestedChatId, onOpen
               <section className="panel"><div className="panel-heading"><div><p className="eyebrow">DAILY RHYTHM</p><h2>24 小时节奏</h2></div></div><Chart option={hourOption} height={240} ariaLabel="当前聊天小时活跃趋势" /></section>
             </div>
 
-            <TopicsPanel accountId={accountId} chatId={detail.chat.id} chatName={detail.chat.displayName} range={range} revision={revision} keywords={detail.keywords} />
+            <TopicsPanel accountId={accountId} chatId={detail.chat.id} chatName={detail.chat.displayName} range={range} revision={revision} keywords={detail.keywords} suspendAutoAi={suspendAutoAi} />
 
-            <section className="panel timeline-panel">
+            <section className="panel timeline-panel" ref={timelineRef}>
               <div className="panel-heading"><div><p className="eyebrow">MESSAGES</p><h2>消息时间线</h2></div><span className="subtle">已显示 {detail.messages.length} 条</span></div>
               <div className="message-timeline">
                 {detail.messages.map((message) => (

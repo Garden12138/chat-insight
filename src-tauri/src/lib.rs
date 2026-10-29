@@ -17,8 +17,9 @@ use database::Database;
 use decisions::{Decision, DecisionFilter, DecisionPatch};
 use media::{MediaKind, MediaResolver};
 use models::{
-    AccountSummary, BootstrapResult, ChatDetailData, ChatListItem, DashboardData, DateRange,
-    ExportResult, ImportResult, MediaInfo, PlatformCapabilities, SyncResult,
+    AccountSummary, BootstrapResult, ChatDetailData, ChatFootprintEntry, ChatListItem,
+    DashboardData, DateRange, ExportResult, ImportResult, MediaInfo, PlatformCapabilities,
+    SyncResult,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -148,6 +149,20 @@ fn list_chats(
     state
         .database
         .list_chats(&account_id, &search)
+        .map_err(public_error)
+}
+
+#[tauri::command]
+fn query_chat_footprint(
+    state: State<'_, AppState>,
+    account_id: String,
+    range: DateRange,
+    chat_kind: Option<String>,
+) -> Result<Vec<ChatFootprintEntry>, String> {
+    let kind = chat_kind.as_deref().filter(|value| !value.is_empty());
+    state
+        .database
+        .chat_footprint(&account_id, &range, kind)
         .map_err(public_error)
 }
 
@@ -313,6 +328,7 @@ pub fn run() {
             cancel_sync,
             query_dashboard,
             list_chats,
+            query_chat_footprint,
             query_chat_detail,
             media_info,
             import_jsonl,

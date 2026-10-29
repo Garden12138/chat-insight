@@ -51,6 +51,10 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [revision, setRevision] = useState(0);
   const [requestedChatId, setRequestedChatId] = useState<string>();
+  const [focusTimeline, setFocusTimeline] = useState(false);
+  const focusReturn = useRef<{ preset: RangePreset; customRange: DateRange } | null>(null);
+  const explicitAllRange = useRef(false);
+  const autoThirty = useRef(false);
   const [toast, setToast] = useState<{ tone: "success" | "error"; text: string }>();
   const [guideMode, setGuideMode] = useState<GuideMode | null>(null);
   const guideReturnView = useRef<ViewName>("overview");
@@ -225,7 +229,66 @@ export default function App() {
     }
   }
 
-  function openDetail(chatId: string) {
+  const preferThirtyDays = useCallback(() => {
+    setPreset((current) => {
+      if (current !== "all" || explicitAllRange.current) return current;
+      autoThirty.current = true;
+      return "30d";
+    });
+  }, []);
+
+  function restoreFocusRange() {
+    const saved = focusReturn.current;
+    if (!saved) return;
+    focusReturn.current = null;
+    setPreset(saved.preset);
+    setCustomRange(saved.customRange);
+    setFocusTimeline(false);
+  }
+
+  function showView(next: ViewName) {
+    if (view === "detail" && next !== "detail") restoreFocusRange();
+    if (next !== "ask" && next !== "detail" && autoThirty.current) {
+      autoThirty.current = false;
+      explicitAllRange.current = false;
+      setPreset("all");
+    }
+    setView(next);
+  }
+
+  function changePreset(next: RangePreset) {
+    autoThirty.current = false;
+    explicitAllRange.current = next === "all";
+    focusReturn.current = null;
+    setFocusTimeline(false);
+    setPreset(next);
+  }
+
+  function changeCustomRange(next: DateRange) {
+    autoThirty.current = false;
+    focusReturn.current = null;
+    setFocusTimeline(false);
+    if (!next.from && !next.to) {
+      explicitAllRange.current = true;
+      setPreset("all");
+      setCustomRange({});
+      return;
+    }
+    explicitAllRange.current = false;
+    setPreset("custom");
+    setCustomRange(next);
+  }
+
+  function openDetail(chatId: string, localDate?: string) {
+    if (localDate) {
+      focusReturn.current = { preset, customRange };
+      setPreset("custom");
+      setCustomRange({ from: localDate, to: localDate });
+      setFocusTimeline(true);
+    } else {
+      focusReturn.current = null;
+      setFocusTimeline(false);
+    }
     setRequestedChatId(chatId);
     setView("detail");
   }
@@ -242,7 +305,7 @@ export default function App() {
         <div className="brand"><BrandMark size={36} /><div><strong>Chat Insight</strong><small>本地聊天分析</small></div></div>
         <nav>
           {navItems.map((item) => (
-            <button key={item.id} data-guide={`nav-${item.id}`} className={view === item.id ? "active" : ""} onClick={() => setView(item.id)}>
+            <button key={item.id} data-guide={`nav-${item.id}`} className={view === item.id ? "active" : ""} onClick={() => showView(item.id)}>
               <Icon name={item.icon} /><span>{item.label}</span>
               {item.id === "commitments" && !!commitmentCounts?.suggested && <b className="nav-badge" title={`${commitmentCounts.suggested} 条约定待确认`}>{commitmentCounts.suggested > 99 ? "99+" : commitmentCounts.suggested}</b>}
               {busyViews[item.id] && <i className="nav-activity" title="AI 任务进行中" aria-hidden="true" />}
@@ -261,7 +324,7 @@ export default function App() {
         <header className="topbar">
           <div><p className="eyebrow">{viewTitles[view].eyebrow}</p><h1>{viewTitles[view].title}</h1></div>
           <div className="topbar-actions">
-            {view !== "data" && view !== "report" && <DateRangePicker preset={preset} range={customRange} onPresetChange={setPreset} onRangeChange={setCustomRange} />}
+            {view !== "data" && view !== "report" && <DateRangePicker preset={preset} range={customRange} onPresetChange={changePreset} onRangeChange={changeCustomRange} />}
             <label className="account-select"><span>数据集</span><select value={activeAccount.id} onChange={(event) => setAccountId(event.target.value)}>{accounts.map((account) => <option value={account.id} key={account.id}>{account.displayName}</option>)}</select></label>
             {capabilities.directWechatRead && capabilities.bridgeBundled && <button className="icon-button" title="同步新消息" aria-label="同步新消息" disabled={busy} onClick={runSync}><Icon name="refresh" /></button>}
           </div>
@@ -269,10 +332,10 @@ export default function App() {
 
         {syncProgress?.running && <div className="sync-strip"><div><span style={{ width: `${syncProgress.total ? (syncProgress.current / syncProgress.total) * 100 : 10}%` }} /></div><p>{syncProgress.message}</p>{syncProgress.phase !== "preparing" && <button onClick={() => api.cancelSync()}>取消</button>}</div>}
         {view === "overview" && <Overview accountId={activeAccount.id} range={range} revision={revision} onOpenDetail={openDetail} />}
-        {view === "commitments" && <Commitments accountId={activeAccount.id} range={range} revision={revision} onCountsChange={setCommitmentCounts} onOpenDetail={openDetail} onOpenSettings={() => setView("data")} />}
-        {view === "detail" && <ChatDetail accountId={activeAccount.id} range={range} revision={revision} requestedChatId={requestedChatId} onOpenCommitments={() => setView("commitments")} />}
-        {view === "ask" && <Ask accountId={activeAccount.id} range={range} revision={revision} onOpenDetail={openDetail} onOpenSettings={() => setView("data")} />}
-        {view === "report" && <Report accountId={activeAccount.id} revision={revision} onOpenDetail={openDetail} onOpenSettings={() => setView("data")} />}
+        {view === "commitments" && <Commitments accountId={activeAccount.id} range={range} revision={revision} onCountsChange={setCommitmentCounts} onOpenDetail={openDetail} onOpenSettings={() => showView("data")} />}
+        {view === "detail" && <ChatDetail accountId={activeAccount.id} range={range} revision={revision} requestedChatId={requestedChatId} focusTimeline={focusTimeline} suspendAutoAi={focusTimeline} onReleaseFocus={restoreFocusRange} onOpenCommitments={() => showView("commitments")} />}
+        {view === "ask" && <Ask accountId={activeAccount.id} range={range} preset={preset} revision={revision} onOpenDetail={openDetail} onOpenSettings={() => showView("data")} onPreferThirtyDays={preferThirtyDays} onCommitRange={changeCustomRange} />}
+        {view === "report" && <Report accountId={activeAccount.id} revision={revision} onOpenDetail={openDetail} onOpenSettings={() => showView("data")} />}
         {view === "data" && <DataManagement account={activeAccount} capabilities={capabilities} busy={busy} onSync={runSync} onSwitchAccount={switchAccount} onImport={importData} onExport={exportData} onClear={clearData} />}
       </main>
 

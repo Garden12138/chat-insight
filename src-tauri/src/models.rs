@@ -90,6 +90,19 @@ pub struct ChatListItem {
     pub last_message_at: Option<String>,
 }
 
+/// One chat that has messages on a local date. Counts every synced message, including media.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChatFootprintEntry {
+    pub local_date: String,
+    pub chat_id: String,
+    pub display_name: String,
+    pub chat_kind: String,
+    pub message_count: i64,
+    pub first_message_at: String,
+    pub last_message_at: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct KeywordCount {

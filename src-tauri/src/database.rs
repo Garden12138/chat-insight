@@ -1,9 +1,9 @@
 use crate::analysis::top_keywords;
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::models::{
-    AccountSummary, ChatDetailData, ChatListItem, DashboardData, DateRange, HeatmapPoint,
-    HourlyPoint, MessageItem, NormalizedMessage, RankedChat, SearchHit, SummaryMetrics, TrendPoint,
-    TypeCount,
+    AccountSummary, ChatDetailData, ChatFootprintEntry, ChatListItem, DashboardData, DateRange,
+    HeatmapPoint, HourlyPoint, MessageItem, NormalizedMessage, RankedChat, SearchHit,
+    SummaryMetrics, TrendPoint, TypeCount,
 };
 use chrono::Utc;
 use rusqlite::types::Value as SqlValue;
@@ -578,6 +578,56 @@ impl Database {
         })
     }
 
+    /// Chats that have any synced message on each local date, newest day first.
+    /// Uses `messages.local_date` and `idx_messages_account_date`. Media and empty text count.
+    pub fn chat_footprint(
+        &self,
+        account_id: &str,
+        range: &DateRange,
+        chat_kind: Option<&str>,
+    ) -> AppResult<Vec<ChatFootprintEntry>> {
+        if let Some(kind) = chat_kind {
+            if kind != "group" && kind != "direct" {
+                return Err(AppError::Validation("聊天类型只能是群聊或私聊".into()));
+            }
+        }
+        let connection = self.connection()?;
+        let mut statement = connection.prepare(
+            "SELECT m.local_date, m.chat_id, c.display_name, c.chat_kind,
+                    COUNT(*) AS message_count,
+                    MIN(m.occurred_at) AS first_message_at,
+                    MAX(m.occurred_at) AS last_message_at
+             FROM messages m
+             JOIN chats c ON c.account_id=m.account_id AND c.chat_id=m.chat_id
+             WHERE m.account_id=?1
+               AND (?2 IS NULL OR m.local_date>=?2)
+               AND (?3 IS NULL OR m.local_date<=?3)
+               AND (?4 IS NULL OR c.chat_kind=?4)
+             GROUP BY m.local_date, m.chat_id, c.display_name, c.chat_kind
+             ORDER BY m.local_date DESC, last_message_at DESC, c.display_name COLLATE NOCASE ASC",
+        )?;
+        let rows = statement.query_map(
+            params![
+                account_id,
+                range.from.as_deref(),
+                range.to.as_deref(),
+                chat_kind,
+            ],
+            |row| {
+                Ok(ChatFootprintEntry {
+                    local_date: row.get(0)?,
+                    chat_id: row.get(1)?,
+                    display_name: row.get(2)?,
+                    chat_kind: row.get(3)?,
+                    message_count: row.get(4)?,
+                    first_message_at: row.get(5)?,
+                    last_message_at: row.get(6)?,
+                })
+            },
+        )?;
+        Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+    }
+
     /// Keyword search over message text. Every whitespace-separated term must match;
     /// terms of three or more characters use the trigram index, shorter ones fall back
     /// to `LIKE` because trigrams cannot represent them.
@@ -1044,6 +1094,127 @@ mod tests {
         );
         let edge = db.message_context("account", "alice", 1, 2).unwrap();
         assert_eq!(edge.len(), 3);
+    }
+
+    #[test]
+    fn chat_footprint_counts_every_message_and_isolates_accounts() {
+        let db = fixture_db();
+        db.upsert_chat("account", "team", "产品群", "group")
+            .unwrap();
+        db.upsert_chat("account", "amy", "Amy", "direct").unwrap();
+        db.upsert_chat("account", "zoe", "Zoe", "direct").unwrap();
+        db.upsert_chat("account", "silent", "没说话", "direct")
+            .unwrap();
+        db.upsert_account("other", "另一个账号", "fixture").unwrap();
+        db.upsert_chat("other", "amy", "Amy", "direct").unwrap();
+
+        let image = NormalizedMessage {
+            chat_id: "team".into(),
+            kind: "image".into(),
+            text: String::new(),
+            ..message(1, "2026-10-27", 8, false)
+        };
+        let voice = NormalizedMessage {
+            chat_id: "team".into(),
+            kind: "voice".into(),
+            text: String::new(),
+            ..message(2, "2026-10-27", 21, true)
+        };
+        let earlier = NormalizedMessage {
+            chat_id: "alice".into(),
+            ..message(3, "2026-10-26", 9, false)
+        };
+        let later = NormalizedMessage {
+            chat_id: "alice".into(),
+            ..message(4, "2026-10-28", 18, false)
+        };
+        let tied_late = NormalizedMessage {
+            chat_id: "zoe".into(),
+            ..message(5, "2026-10-28", 18, false)
+        };
+        let tied_early_name = NormalizedMessage {
+            chat_id: "amy".into(),
+            ..message(6, "2026-10-28", 18, false)
+        };
+        let outside = NormalizedMessage {
+            chat_id: "alice".into(),
+            ..message(7, "2026-10-20", 9, false)
+        };
+        let other_account = NormalizedMessage {
+            chat_id: "amy".into(),
+            ..message(8, "2026-10-28", 19, false)
+        };
+        for item in [
+            &image,
+            &voice,
+            &earlier,
+            &later,
+            &tied_late,
+            &tied_early_name,
+            &outside,
+        ] {
+            db.insert_message("account", item).unwrap();
+        }
+        db.insert_message("other", &other_account).unwrap();
+
+        let all = db
+            .chat_footprint("account", &DateRange::default(), None)
+            .unwrap();
+        assert!(all.iter().all(|row| row.chat_id != "silent"));
+        assert!(all.iter().all(|row| row.display_name != "另一个账号"));
+        let day_28: Vec<_> = all
+            .iter()
+            .filter(|row| row.local_date == "2026-10-28")
+            .map(|row| row.chat_id.as_str())
+            .collect();
+        assert_eq!(day_28, vec!["amy", "zoe", "alice"]);
+        let team = all
+            .iter()
+            .find(|row| row.chat_id == "team")
+            .expect("media messages count");
+        assert_eq!(team.message_count, 2);
+        assert_eq!(team.first_message_at, "2026-10-27T08:00:00+08:00");
+        assert_eq!(team.last_message_at, "2026-10-27T21:00:00+08:00");
+        assert_eq!(team.chat_kind, "group");
+
+        let bounded = db
+            .chat_footprint(
+                "account",
+                &DateRange {
+                    from: Some("2026-10-27".into()),
+                    to: Some("2026-10-28".into()),
+                },
+                None,
+            )
+            .unwrap();
+        assert!(bounded
+            .iter()
+            .all(|row| row.local_date.as_str() >= "2026-10-27"));
+        assert!(bounded
+            .iter()
+            .all(|row| row.local_date.as_str() <= "2026-10-28"));
+        assert!(!bounded.iter().any(|row| row.local_date == "2026-10-26"));
+
+        let groups = db
+            .chat_footprint("account", &DateRange::default(), Some("group"))
+            .unwrap();
+        assert!(groups.iter().all(|row| row.chat_kind == "group"));
+        assert_eq!(groups.len(), 1);
+        let directs = db
+            .chat_footprint("account", &DateRange::default(), Some("direct"))
+            .unwrap();
+        assert!(directs.iter().all(|row| row.chat_kind == "direct"));
+        assert!(directs.len() > groups.len());
+        assert!(db
+            .chat_footprint("account", &DateRange::default(), Some("room"))
+            .is_err());
+
+        let foreign = db
+            .chat_footprint("other", &DateRange::default(), None)
+            .unwrap();
+        assert_eq!(foreign.len(), 1);
+        assert_eq!(foreign[0].chat_id, "amy");
+        assert_eq!(foreign[0].message_count, 1);
     }
 
     #[test]

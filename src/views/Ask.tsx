@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "../api";
 import { formatChars, runAiTask, stopAiTask, useAi, useAiTask, useSessionState } from "../ai";
+import { footprintQueryRange } from "../chatFootprint";
 import { withEmoji } from "../emoji";
 import {
   dateIntersectsRange,
@@ -10,6 +11,7 @@ import {
 } from "../eventReviewDate";
 import type {
   AiIndexStatus,
+  RangePreset,
   AskResult,
   AskSource,
   ChatListItem,
@@ -20,6 +22,8 @@ import type {
   EventReviewResult,
   SearchHit,
 } from "../types";
+import { ChatFootprint } from "../components/ChatFootprint";
+import { DateField } from "../components/DateField";
 import { Icon } from "../components/Icons";
 import { Markdown } from "../components/Markdown";
 import { MessageContext } from "../components/MessageContext";
@@ -29,12 +33,16 @@ import { errorMessage, formatCount, formatDateTime, toLocalDate } from "../utils
 interface AskProps {
   accountId: string;
   range: DateRange;
+  preset?: RangePreset;
   revision: number;
-  onOpenDetail: (chatId: string) => void;
+  onOpenDetail: (chatId: string, localDate?: string) => void;
+  onPreferThirtyDays?: () => void;
+  onCommitRange?: (range: DateRange) => void;
   onOpenSettings: () => void;
 }
 
 type Mode = "ask" | "search" | "review";
+type ReviewPane = "footprint" | "events";
 
 interface ContextTarget {
   chatId: string;
@@ -91,9 +99,10 @@ function reviewScopeLabel(chats: ChatListItem[], chatId: string) {
   return `${chatKindLabel(chat.chatKind)}「${chat.displayName}」`;
 }
 
-export function Ask({ accountId, range, revision, onOpenDetail, onOpenSettings }: AskProps) {
+export function Ask({ accountId, range, preset, revision, onOpenDetail, onOpenSettings, onPreferThirtyDays, onCommitRange }: AskProps) {
   const { settings, confirmCloud } = useAi();
   const [pickedMode, setMode] = useSessionState<Mode | undefined>(`ask-mode:${accountId}`, undefined);
+  const [reviewPane, setReviewPane] = useSessionState<ReviewPane>(`ask-review-pane:${accountId}`, "footprint");
   const mode = pickedMode ?? (settings.enabled ? "ask" : "search");
   const [query, setQuery] = useSessionState(`ask-query:${accountId}`, "");
   const [chatId, setChatId] = useSessionState(`ask-chat:${accountId}`, "");
@@ -127,18 +136,23 @@ export function Ask({ accountId, range, revision, onOpenDetail, onOpenSettings }
   }, [accountId, revision]);
 
   useEffect(() => {
-    if (!settings.enabled) return;
+    if (!settings.enabled || (mode === "review" && reviewPane === "footprint")) return;
     api.aiIndexStatus(accountId).then(setIndexStatus).catch(() => setIndexStatus(undefined));
-  }, [accountId, settings.enabled, settings.embedModel, revision]);
+  }, [accountId, settings.enabled, settings.embedModel, revision, mode, reviewPane]);
 
   useEffect(() => {
+    if (mode === "review" && reviewPane === "footprint") onPreferThirtyDays?.();
+  }, [mode, reviewPane, onPreferThirtyDays]);
+
+  useEffect(() => {
+    if (mode !== "review" || reviewPane !== "events") return;
     let active = true;
     setEstimateError("");
     api.eventReviewEstimate(accountId, reviewDate, reviewChatId || undefined)
       .then((value) => { if (active) setEstimate(value); })
       .catch((reason) => { if (active) { setEstimate(undefined); setEstimateError(errorMessage(reason)); } });
     return () => { active = false; };
-  }, [accountId, reviewDate, reviewChatId, revision]);
+  }, [accountId, reviewDate, reviewChatId, revision, mode, reviewPane]);
 
   const sourcesByIndex = useMemo(() => new Map((answer?.sources ?? []).map((source) => [source.index, source])), [answer]);
   const visibleEvents = useMemo(
@@ -237,6 +251,7 @@ export function Ask({ accountId, range, revision, onOpenDetail, onOpenSettings }
     const route = routeEventReview(text, selectedChat);
     if (route) {
       setMode("review");
+      setReviewPane("events");
       setReviewDate(route.date);
       setReviewChatId(route.chatId);
       setRouteNotice(`已识别日期 ${formatReviewDate(route.date)}，已切换到事件回顾`);
@@ -268,12 +283,17 @@ export function Ask({ accountId, range, revision, onOpenDetail, onOpenSettings }
         </div>
 
         {mode === "review" ? (
+          <div className="review-switch">
+            <div className="segmented" role="tablist" aria-label="回顾方式">
+              <button type="button" role="tab" aria-selected={reviewPane === "footprint"} className={reviewPane === "footprint" ? "active" : ""} onClick={() => setReviewPane("footprint")}><Icon name="calendar" />聊天足迹</button>
+              <button type="button" role="tab" aria-selected={reviewPane === "events"} className={reviewPane === "events" ? "active" : ""} onClick={() => setReviewPane("events")}><Icon name="sparkle" />AI 事件回顾</button>
+            </div>
+          </div>
+        ) : null}
+        {mode === "review" && reviewPane === "footprint" ? null : mode === "review" ? (
           <div className="event-review">
             <div className="event-filter-grid">
-              <label className="event-field">
-                <span>回顾日期</span>
-                <input type="date" value={reviewDate} onChange={(event) => setReviewDate(event.target.value)} aria-label="回顾日期" />
-              </label>
+              <DateField className="event-field" label="回顾日期" value={reviewDate} onChange={setReviewDate} />
               <label className="event-field">
                 <span>分析范围</span>
                 <select value={reviewChatId} onChange={(event) => setReviewChatId(event.target.value)} aria-label="分析范围">
@@ -328,10 +348,20 @@ export function Ask({ accountId, range, revision, onOpenDetail, onOpenSettings }
         )}
       </section>
 
-      {routeNotice && mode === "review" && <InlineNotice tone="info">{routeNotice}</InlineNotice>}
+      {mode === "review" && reviewPane === "footprint" && (
+        <ChatFootprint
+          accountId={accountId}
+          range={preset === "all" ? {} : footprintQueryRange(range, false)}
+          revision={revision}
+          onOpenChat={onOpenDetail}
+          onCommitRange={onCommitRange ?? (() => undefined)}
+        />
+      )}
+
+      {routeNotice && mode === "review" && reviewPane === "events" && <InlineNotice tone="info">{routeNotice}</InlineNotice>}
       {dateConflict && mode === "ask" && <InlineNotice tone="warning">{dateConflict}</InlineNotice>}
 
-      {mode !== "search" && !aiReady && (
+      {((mode === "ask") || (mode === "review" && reviewPane === "events")) && !aiReady && (
         <InlineNotice tone="warning">
           <strong>{mode === "review" ? "事件回顾需要先开启 AI" : "AI 问答尚未开启"}</strong>
           <p>到「数据管理 → AI 设置」里开启。关键词搜索不用开 AI。</p>
@@ -347,7 +377,7 @@ export function Ask({ accountId, range, revision, onOpenDetail, onOpenSettings }
       )}
       {error && <InlineNotice tone="error">{error}</InlineNotice>}
 
-      {mode === "review" && review.running && (
+      {mode === "review" && reviewPane === "events" && review.running && (
         <section className="panel event-progress" aria-live="polite">
           <div className="event-progress-head">
             <span className="spinner" />
@@ -358,7 +388,7 @@ export function Ask({ accountId, range, revision, onOpenDetail, onOpenSettings }
         </section>
       )}
 
-      {mode === "review" && reviewResult && !review.running && (
+      {mode === "review" && reviewPane === "events" && reviewResult && !review.running && (
         reviewResult.messageCount === 0 ? (
           <EmptyState title="这一天没有可分析的聊天文本" description="换一天，或换一个聊天范围再试试。" />
         ) : (

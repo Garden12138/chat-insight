@@ -13,21 +13,22 @@ interface AiSummaryPanelProps {
   chatName: string;
   range: DateRange;
   revision: number;
+  suspendAutoAi?: boolean;
 }
 
-export function AiSummaryPanel({ accountId, chatId, chatName, range, revision }: AiSummaryPanelProps) {
+export function AiSummaryPanel({ accountId, chatId, chatName, range, revision, suspendAutoAi = false }: AiSummaryPanelProps) {
   const { settings, confirmCloud } = useAi();
   const key = `summary:${accountId}:${chatId}:${range.from ?? ""}:${range.to ?? ""}`;
   const task = useAiTask<SummaryResult>(key);
 
   useEffect(() => {
-    if (!settings.enabled || getAiTask(key).running) return;
+    if (suspendAutoAi || !settings.enabled || getAiTask(key).running) return;
     let active = true;
     api.summarizeChat(accountId, chatId, range, newRequestId(), "cached")
       .then((value) => { if (active) setAiTaskResult(key, value ?? undefined); })
       .catch(() => undefined);
     return () => { active = false; };
-  }, [key, accountId, chatId, range, revision, settings.enabled, settings.chatModel]);
+  }, [key, accountId, chatId, range, revision, settings.enabled, settings.chatModel, suspendAutoAi]);
 
   async function generate(mode: "generate" | "refresh") {
     let detail = `“${chatName}”在当前日期范围内的文本消息。`;

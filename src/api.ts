@@ -13,6 +13,7 @@ import type {
   AskResult,
   BootstrapResult,
   ChatDetailData,
+  ChatFootprintEntry,
   ChatListItem,
   Commitment,
   CommitmentCounts,
@@ -70,6 +71,8 @@ export const api = {
     call<DashboardData>("query_dashboard", { accountId, range }),
   chats: (accountId: string, search = "") =>
     call<ChatListItem[]>("list_chats", { accountId, search }),
+  chatFootprint: (accountId: string, range: DateRange, chatKind?: "group" | "direct") =>
+    call<ChatFootprintEntry[]>("query_chat_footprint", { accountId, range, chatKind: chatKind ?? null }),
   chatDetail: (accountId: string, chatId: string, range: DateRange, offset = 0, limit = 60) =>
     call<ChatDetailData>("query_chat_detail", { accountId, chatId, range, offset, limit }),
   mediaInfo: (accountId: string, chatId: string, localId: number, kind: string) =>
