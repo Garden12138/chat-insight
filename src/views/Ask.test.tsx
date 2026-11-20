@@ -88,6 +88,34 @@ describe("keyword search", () => {
 });
 
 describe("AI ask", () => {
+  it("confirms an xcli question with local vectors and stops it while running", async () => {
+    mocks.api.aiSettings.mockResolvedValue({
+      ...defaultAiSettings,
+      enabled: true,
+      provider: "xcli",
+      chatModel: "codex",
+      allowCloud: true,
+      isLocal: false,
+      textIsLocal: false,
+      vectorProvider: "openai_compatible",
+    });
+    let stop: (error: Error) => void = () => undefined;
+    mocks.api.ask.mockImplementation(() => new Promise<AskResult>((_, reject) => { stop = reject; }));
+    renderAsk();
+    await act(async () => {});
+    fireEvent.change(screen.getByLabelText("输入问题"), { target: { value: "合成测试问题" } });
+    fireEvent.click(screen.getByRole("button", { name: "提问" }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("本机 xcli → Codex 的云端模型");
+    expect(mocks.api.ask).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "确认发送" })));
+    expect(mocks.api.ask).toHaveBeenCalledWith("a", "合成测试问题", {}, "", expect.any(String), true);
+    fireEvent.click(screen.getByRole("button", { name: "停止" }));
+    const requestId = mocks.api.ask.mock.calls[0][4];
+    expect(mocks.api.cancelAi).toHaveBeenCalledWith(requestId);
+    await act(async () => stop(new Error("已停止生成")));
+    expect(screen.getByRole("button", { name: "提问" })).toBeEnabled();
+  });
+
   it("streams the answer and lists cited sources", async () => {
     const result: AskResult = {
       answer: "你们约了周末去公园 [1]",

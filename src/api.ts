@@ -94,7 +94,6 @@ export const api = {
   aiSettings: async () => (inTauri() ? call<AiSettingsView>("ai_get_settings") : defaultAiSettings),
   saveAiSettings: (input: AiSettingsInput) => call<AiSettingsView>("ai_save_settings", { input }),
   testAi: () => call<AiTestResult>("ai_test_connection"),
-  xcliPrivacy: () => call<import("./types").GatewayPrivacy | null>("ai_xcli_privacy"),
   aiIndexStatus: (accountId: string) => call<AiIndexStatus>("ai_index_status", { accountId }),
   buildAiIndex: (accountId: string, rebuild: boolean, cloudConsent: boolean) =>
     call<AiIndexOutcome>("ai_build_index", { accountId, rebuild, cloudConsent }),

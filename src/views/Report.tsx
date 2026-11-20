@@ -51,7 +51,7 @@ export function Report({ accountId, revision, onOpenDetail, onOpenSettings }: Re
   const [anonymize, setAnonymize] = useSessionState("report-anonymize", true);
   const cloud = usesCloud(settings);
   const reportKey = `report:${accountId}:${insights?.year ?? ""}`;
-  const { text, status, running, result: report, error: reportError } = useAiTask<ReportResult>(reportKey);
+  const { text, status, running, cancellable, result: report, error: reportError } = useAiTask<ReportResult>(reportKey);
 
   useEffect(() => {
     let active = true;
@@ -155,7 +155,7 @@ export function Report({ accountId, revision, onOpenDetail, onOpenSettings }: Re
             <div className="panel-actions">
               {cloud && <label className="checkbox-label"><input type="checkbox" checked={anonymize} disabled={running} onChange={(event) => setAnonymize(event.target.checked)} />用代号替换联系人名称</label>}
               {running
-                ? <button type="button" className="secondary-button compact" onClick={() => stopAiTask(reportKey)}><Icon name="stop" />停止</button>
+                ? cancellable && <button type="button" className="secondary-button compact" onClick={() => stopAiTask(reportKey)}><Icon name="stop" />停止</button>
                 : <button type="button" className={report ? "secondary-button compact" : "primary-button compact"} onClick={generate}><Icon name="sparkle" />{report ? "重新生成" : "生成回顾"}</button>}
             </div>
           )}

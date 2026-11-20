@@ -641,7 +641,7 @@ mark { padding: 0 2px; border-radius: 4px; color: inherit; background: rgba(242,
 .field > span em { margin-left: 8px; color: var(--sage); font-style: normal; }
 .field input { width: 100%; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; color: var(--ink); background: var(--surface-solid); font-size: 13px; }
 .field input[readonly] { color: var(--muted); background: var(--surface-sunken); }
-.provider-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.provider-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 170px), 1fr)); gap: 10px; }
 .provider-card { position: relative; display: grid; gap: 4px; padding: 13px 15px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-solid); cursor: pointer; transition: border-color .18s ease, background .18s ease, box-shadow .18s ease; }
 .provider-card input { position: absolute; opacity: 0; width: 1px; height: 1px; padding: 0; border: 0; pointer-events: none; }
 .provider-card strong { font-size: 14px; }

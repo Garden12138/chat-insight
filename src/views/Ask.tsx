@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { api } from "../api";
-import { formatChars, runAiTask, stopAiTask, useAi, useAiTask, useSessionState } from "../ai";
+import { hasVectorService, formatChars, runAiTask, stopAiTask, useAi, useAiTask, useSessionState } from "../ai";
 import { footprintQueryRange } from "../chatFootprint";
 import { withEmoji } from "../emoji";
 import {
@@ -138,7 +138,7 @@ export function Ask({ accountId, range, preset, revision, onOpenDetail, onOpenSe
   useEffect(() => {
     if (!settings.enabled || (mode === "review" && reviewPane === "footprint")) return;
     api.aiIndexStatus(accountId).then(setIndexStatus).catch(() => setIndexStatus(undefined));
-  }, [accountId, settings.enabled, settings.embedModel, revision, mode, reviewPane]);
+  }, [accountId, settings.enabled, settings.provider, settings.embedModel, settings.vectorProvider, revision, mode, reviewPane]);
 
   useEffect(() => {
     if (mode === "review" && reviewPane === "footprint") onPreferThirtyDays?.();
@@ -193,6 +193,7 @@ export function Ask({ accountId, range, preset, revision, onOpenDetail, onOpenSe
     const scope = chatId ? `“${chats.find((chat) => chat.id === chatId)?.displayName ?? "所选聊天"}”中` : "所有聊天中";
     const consent = await confirmCloud({
       title: "发送问题和相关聊天",
+      targets: ["vectors", "text"],
       detail: `你的问题，以及从${scope}找到的相关聊天。`,
     });
     if (consent === null) return;
@@ -230,6 +231,7 @@ export function Ask({ accountId, range, preset, revision, onOpenDetail, onOpenSe
     const scope = reviewScopeLabel(chats, chat);
     const consent = await confirmCloud({
       title: "发送当天聊天文本以整理事件",
+      targets: ["text"],
       detail: `${formatReviewDate(date)} · ${scope} · ${formatCount(nextEstimate.messageCount)} 条文本 · ${formatChars(nextEstimate.chars)} · ${nextEstimate.segmentCount} 个片段。`,
     });
     if (consent === null) return;
@@ -268,7 +270,7 @@ export function Ask({ accountId, range, preset, revision, onOpenDetail, onOpenSe
   }
 
   const aiReady = settings.enabled;
-  const needsIndex = aiReady && indexStatus && indexStatus.indexedChunks === 0;
+  const needsIndex = aiReady && hasVectorService(settings) && indexStatus && indexStatus.indexedChunks === 0;
   const reviewResult = review.result;
   const progress = parseSegmentProgress(review.status);
   const currentReviewScope = reviewScopeLabel(chats, reviewChatId);
@@ -313,7 +315,7 @@ export function Ask({ accountId, range, preset, revision, onOpenDetail, onOpenSe
               <div className="event-filter-action">
                 <span className="event-field-spacer" aria-hidden="true">操作</span>
                 {review.running
-                  ? <button type="button" className="secondary-button" onClick={() => stopAiTask(reviewKey)}><Icon name="stop" />停止</button>
+                  ? review.cancellable && <button type="button" className="secondary-button" onClick={() => stopAiTask(reviewKey)}><Icon name="stop" />停止</button>
                   : <button type="button" className="primary-button" disabled={!aiReady} onClick={() => void runReview(reviewDate, reviewChatId)}><Icon name="sparkle" />开始分析</button>}
               </div>
             </div>
@@ -340,7 +342,7 @@ export function Ask({ accountId, range, preset, revision, onOpenDetail, onOpenSe
                 {chats.map((chat) => <option key={chat.id} value={chat.id}>{chat.displayName}</option>)}
               </select>
               {stream.running
-                ? <button type="button" className="secondary-button" onClick={() => stopAiTask(askKey)}><Icon name="stop" />停止</button>
+                ? stream.cancellable && <button type="button" className="secondary-button" onClick={() => stopAiTask(askKey)}><Icon name="stop" />停止</button>
                 : <button type="submit" className="primary-button" disabled={!query.trim() || searching || (mode === "ask" && !aiReady)}>{mode === "ask" ? "提问" : "搜索"}</button>}
             </form>
             <p className="subtle ask-hint">结果受顶部日期范围限制。</p>
@@ -382,7 +384,7 @@ export function Ask({ accountId, range, preset, revision, onOpenDetail, onOpenSe
           <div className="event-progress-head">
             <span className="spinner" />
             <strong>{progress ? `正在分析 ${progress.current} / ${progress.total}` : "正在分析"}</strong>
-            <button type="button" className="secondary-button" onClick={() => stopAiTask(reviewKey)}>停止</button>
+            {review.cancellable && <button type="button" className="secondary-button" onClick={() => stopAiTask(reviewKey)}>停止</button>}
           </div>
           <div className="event-progress-track"><span style={{ width: `${progress ? Math.round((progress.current / progress.total) * 100) : 8}%` }} /></div>
         </section>

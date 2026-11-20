@@ -1,12 +1,13 @@
 import { createContext, useCallback, useContext, useEffect, useState, useSyncExternalStore } from "react";
 import { api } from "./api";
 import { defaultAiSettings } from "./aiDefaults";
-import type { AiSettingsView } from "./types";
+import type { AiSettingsView, AiTarget } from "./types";
 import { errorMessage } from "./utils";
 
 export interface ConsentRequest {
   title: string;
   detail: string;
+  targets: AiTarget[];
 }
 
 export interface AiContextValue {
@@ -29,8 +30,16 @@ export const useAi = () => useContext(AiContext);
 
 export const STOPPED_MESSAGE = "已停止生成";
 
-export function usesCloud(settings: AiSettingsView): boolean {
-  return settings.enabled && !settings.isLocal && settings.allowCloud;
+export function isLocalAiTarget(settings: AiSettingsView, target: AiTarget): boolean {
+  return target === "text" ? settings.textIsLocal : settings.vectorsIsLocal;
+}
+
+export function usesCloud(settings: AiSettingsView, targets: AiTarget[] = ["text"]): boolean {
+  return settings.enabled && settings.allowCloud && targets.some((target) => !isLocalAiTarget(settings, target));
+}
+
+export function hasVectorService(settings: AiSettingsView): boolean {
+  return settings.provider !== "xcli" || settings.vectorProvider !== null;
 }
 
 export function newRequestId(): string {
@@ -54,6 +63,7 @@ export interface AiTask<T = unknown> {
   /** Free-form caption for the run, e.g. the question being answered. */
   label: string;
   requestId?: string;
+  cancellable?: boolean;
 }
 
 const IDLE: AiTask<never> = Object.freeze({ running: false, text: "", status: "", error: "", label: "" });
@@ -100,7 +110,7 @@ export function setAiTaskResult<T>(key: string, result: T | undefined) {
 export async function runAiTask<T>(
   key: string,
   task: (requestId: string) => Promise<T | null>,
-  options: { reset?: boolean; label?: string } = {},
+  options: { reset?: boolean; label?: string; cancellable?: boolean } = {},
 ): Promise<void> {
   if (getAiTask(key).running) return;
   const requestId = newRequestId();
@@ -111,6 +121,7 @@ export async function runAiTask<T>(
     error: "",
     label: options.label ?? "",
     requestId,
+    cancellable: options.cancellable ?? true,
     ...(options.reset ? { result: undefined } : {}),
   });
   const unlisten = await api.onAiStream((event) => {
@@ -133,8 +144,8 @@ export async function runAiTask<T>(
 export const INDEX_PROGRESS_KEY = "index-progress";
 
 export function stopAiTask(key: string) {
-  const { requestId, running } = getAiTask(key);
-  if (running && requestId) api.cancelAi(requestId).catch(() => undefined);
+  const { requestId, running, cancellable } = getAiTask(key);
+  if (running && requestId && cancellable) api.cancelAi(requestId).catch(() => undefined);
 }
 
 const session = new Map<string, unknown>();

@@ -153,6 +153,7 @@ export interface ExportResult {
 }
 
 export type AiProvider = "openai_compatible" | "bailian" | "xcli";
+export type AiTarget = "text" | "vectors";
 
 export interface AiSettings {
   provider?: AiProvider;
@@ -160,6 +161,8 @@ export interface AiSettings {
   baseUrl: string;
   chatModel: string;
   embedModel: string;
+  vectorProvider: Exclude<AiProvider, "xcli"> | null;
+  vectorBaseUrl: string;
   allowCloud: boolean;
   /** Scan new messages for commitments after each sync; local models only. */
   autoScanCommitments: boolean;
@@ -167,6 +170,9 @@ export interface AiSettings {
 
 export interface AiSettingsView extends AiSettings {
   hasApiKey: boolean;
+  hasVectorApiKey: boolean;
+  textIsLocal: boolean;
+  vectorsIsLocal: boolean;
   isLocal: boolean;
   host: string;
 }
@@ -174,20 +180,14 @@ export interface AiSettingsView extends AiSettings {
 export interface AiSettingsInput extends AiSettings {
   /** Omit to keep the stored key; an empty string removes it. */
   apiKey?: string;
+  /** Omit to keep the stored vector key; an empty string removes it. */
+  vectorApiKey?: string;
 }
 
 export interface AiTestResult {
   models: string[];
   chatModelFound: boolean;
   embeddingDimension: number;
-  gateway?: GatewayPrivacy | null;
-}
-
-export interface GatewayPrivacy {
-  chatCloud: boolean;
-  embeddingCloud: boolean;
-  chatLocation: string;
-  embeddingLocation: string;
 }
 
 export interface AiIndexStatus {

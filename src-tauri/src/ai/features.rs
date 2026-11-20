@@ -435,6 +435,7 @@ pub fn chat_topics(
     account_id: &str,
     chat_id: &str,
     range: &DateRange,
+    name_with_model: bool,
 ) -> AppResult<TopicsResult> {
     let mut ids = Vec::new();
     let mut vectors = Vec::new();
@@ -488,26 +489,27 @@ pub fn chat_topics(
             .map(|chunk| chunk.text.chars().take(300).collect())
             .unwrap_or_default()
     };
-    let groups = clusters
-        .iter()
-        .enumerate()
-        .map(|(position, cluster)| {
-            let samples = cluster
-                .samples
-                .iter()
-                .map(|index| sample_text(*index))
-                .collect::<Vec<_>>()
-                .join("\n---\n");
-            format!(
-                "## 第 {} 组（{} 段）\n{samples}",
-                position + 1,
-                cluster.members.len()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    sink.status("正在为话题命名…");
-    let reply = quiet_reply(
+    let labels = if name_with_model {
+        let groups = clusters
+            .iter()
+            .enumerate()
+            .map(|(position, cluster)| {
+                let samples = cluster
+                    .samples
+                    .iter()
+                    .map(|index| sample_text(*index))
+                    .collect::<Vec<_>>()
+                    .join("\n---\n");
+                format!(
+                    "## 第 {} 组（{} 段）\n{samples}",
+                    position + 1,
+                    cluster.members.len()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        sink.status("正在为话题命名…");
+        let reply = quiet_reply(
         client,
         sink,
         &[
@@ -518,7 +520,10 @@ pub fn chat_topics(
             ChatMessage::user(groups),
         ],
     )?;
-    let labels = parse_labels(&reply);
+        parse_labels(&reply)
+    } else {
+        Vec::new()
+    };
 
     let total = ids.len();
     let topics = clusters
@@ -780,6 +785,38 @@ mod tests {
         assert!(prompt.contains("问题：我们什么时候去日本？"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn xcli_without_vectors_answers_from_keywords_and_keeps_sources() {
+        use super::super::client::AiClient;
+        use super::super::xcli::{tests::make_fake_xcli, XcliClient, NO_VECTORS};
+
+        let db = seeded_db(&["合成测试消息：火星基地演练"]);
+        let dir = tempdir().unwrap();
+        let executable = make_fake_xcli(dir.path(), "ok");
+        let client = AiClient::Xcli(XcliClient::with_fake_executable(executable));
+        assert_eq!(client.embed_model(), NO_VECTORS);
+        assert_eq!(
+            db.ai_index_counts("account", None, client.embed_model())
+                .unwrap()
+                .indexed_chunks,
+            0
+        );
+        let result = ask(
+            &db,
+            &client,
+            &NullSink,
+            "account",
+            "火星基地",
+            Some("alice"),
+            &DateRange::default(),
+            "2026-10-09",
+        )
+        .unwrap();
+        assert_eq!(result.answer, "合成摘要");
+        assert!(result.sources[0].text.contains("火星基地"));
+    }
+
     #[test]
     fn says_so_when_nothing_matches() {
         let db = seeded_db(&["周末一起去公园拍照"]);
@@ -929,6 +966,7 @@ mod tests {
             "account",
             "alice",
             &DateRange::default(),
+            true,
         )
         .unwrap();
         assert!(result.topics.len() >= 2);
@@ -936,6 +974,20 @@ mod tests {
         assert!(!result.topics[1].name.is_empty());
         let total: f64 = result.topics.iter().map(|topic| topic.share).sum();
         assert!((total - 1.0).abs() < 1e-9);
+
+        let previous_calls = client.prompts.lock().unwrap().len();
+        let local = chat_topics(
+            &db,
+            &client,
+            &NullSink,
+            "account",
+            "alice",
+            &DateRange::default(),
+            false,
+        )
+        .unwrap();
+        assert_eq!(client.prompts.lock().unwrap().len(), previous_calls);
+        assert!(local.topics.iter().all(|topic| !topic.name.is_empty()));
     }
 
     #[test]

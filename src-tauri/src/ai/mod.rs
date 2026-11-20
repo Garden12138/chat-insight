@@ -8,19 +8,20 @@ pub mod extraction;
 #[cfg(test)]
 mod extraction_eval;
 pub mod features;
-pub mod gateway;
 pub mod indexer;
 pub mod retrieval;
 pub mod settings;
 pub mod store;
+pub mod xcli;
 
-use client::OpenAiCompatClient;
+use client::{AiClient, OpenAiCompatClient};
 use serde::Serialize;
-use settings::{AiSettings, SettingsStore};
+use settings::{AiProvider, AiSettings, SettingsStore};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
+use xcli::{resolve_xcli_executable, XcliClient};
 
 /// Receives incremental output from long-running AI work.
 pub trait Sink {
@@ -119,16 +120,29 @@ impl AiState {
         }
     }
 
-    pub fn client(&self) -> (AiSettings, OpenAiCompatClient) {
-        let settings = self.settings.load();
-        let client = OpenAiCompatClient::new(&settings, self.settings.api_key())
-            .with_index_identity(self.settings.embedding_identity());
+    pub fn client(&self) -> (AiSettings, AiClient) {
+        let (settings, key) = self.settings.load_for_client();
+        let client = if settings.provider == AiProvider::Xcli {
+            let vectors = settings
+                .vector_provider
+                .filter(|provider| *provider != AiProvider::Xcli)
+                .map(|provider| {
+                    let vector_settings = AiSettings {
+                        provider,
+                        base_url: settings.vector_base_url.clone(),
+                        embed_model: settings.embed_model.clone(),
+                        ..AiSettings::default()
+                    };
+                    OpenAiCompatClient::new(&vector_settings, key)
+                });
+            AiClient::Xcli(XcliClient::new(
+                resolve_xcli_executable(&settings.base_url),
+                vectors,
+            ))
+        } else {
+            AiClient::Compat(OpenAiCompatClient::new(&settings, key))
+        };
         (settings, client)
-    }
-
-    pub fn client_with_consent(&self, consent: bool) -> (AiSettings, OpenAiCompatClient) {
-        let (settings, client) = self.client();
-        (settings, client.with_cloud_consent(consent))
     }
 
     pub fn stream(&self, app: &AppHandle, request_id: &str) -> StreamSink {
