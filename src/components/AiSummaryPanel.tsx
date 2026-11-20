@@ -36,9 +36,9 @@ export function AiSummaryPanel({ accountId, chatId, chatName, range, revision, s
       const estimate = await api.aiEstimate(accountId, range, chatId);
       detail = `“${chatName}”在当前日期范围内的 ${estimate.messages.toLocaleString("zh-CN")} 条文本消息（约 ${formatChars(estimate.chars)}）。`;
     }
-    const consent = await confirmCloud({ title: "发送聊天记录以生成摘要", detail });
+    const consent = await confirmCloud({ title: "发送聊天记录以生成摘要", detail, targets: ["text"] });
     if (consent === null) return;
-    await runAiTask(key, (requestId) => api.summarizeChat(accountId, chatId, range, requestId, mode, consent));
+    await runAiTask(key, (requestId) => api.summarizeChat(accountId, chatId, range, requestId, mode, consent), { cancellable: settings.provider !== "xcli" });
   }
 
   const { running, text, status, result, error } = task;
@@ -65,7 +65,7 @@ export function AiSummaryPanel({ accountId, chatId, chatName, range, revision, s
       <div className="panel-heading">
         <div><p className="eyebrow">AI SUMMARY</p><h2>聊天摘要</h2></div>
         {settings.enabled && (running
-          ? <button type="button" className="secondary-button compact" onClick={() => stopAiTask(key)}><Icon name="stop" />停止</button>
+          ? task.cancellable && <button type="button" className="secondary-button compact" onClick={() => stopAiTask(key)}><Icon name="stop" />停止</button>
           : <button type="button" className={result ? "secondary-button compact" : "primary-button compact"} onClick={() => generate(result ? "refresh" : "generate")}><Icon name="sparkle" />{result ? "重新生成" : "生成摘要"}</button>)}
       </div>
       <div className="ai-panel-body">

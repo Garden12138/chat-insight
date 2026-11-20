@@ -169,12 +169,23 @@ describe("scanning", () => {
   });
 
   it("asks before sending to a cloud model and keeps saved items without AI", async () => {
-    mocks.api.aiSettings.mockResolvedValue({ ...defaultAiSettings, enabled: true, isLocal: false, allowCloud: true, host: "api.example.com" });
+    mocks.api.aiSettings.mockResolvedValue({ ...defaultAiSettings, enabled: true, isLocal: false, textIsLocal: false, vectorsIsLocal: false, allowCloud: true, host: "api.example.com" });
     mocks.api.commitmentEstimate.mockResolvedValue({ chats: 2, windows: 4, skipped: 9, chars: 3200 });
     renderView();
     await act(async () => {});
     fireEvent.click(screen.getByRole("button", { name: "扫描聊天" }));
     expect(await screen.findByText(/大约 4 段聊天/)).toBeVisible();
+    expect(mocks.api.scanCommitments).not.toHaveBeenCalled();
+  });
+
+  it("disables commitment scanning with xcli", async () => {
+    mocks.api.aiSettings.mockResolvedValue({ ...defaultAiSettings, enabled: true, provider: "xcli" });
+    renderView();
+    const scan = await screen.findByRole("button", { name: "扫描聊天" });
+    expect(scan).toBeDisabled();
+    expect(screen.getByText(/xcli 每次调用都要启动 CLI/)).toBeVisible();
+    fireEvent.click(scan);
+    expect(mocks.api.commitmentEstimate).not.toHaveBeenCalled();
     expect(mocks.api.scanCommitments).not.toHaveBeenCalled();
   });
 

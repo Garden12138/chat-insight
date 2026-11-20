@@ -88,6 +88,32 @@ describe("keyword search", () => {
 });
 
 describe("AI ask", () => {
+  it("confirms an xcli question with local vectors and hides cancellation while running", async () => {
+    mocks.api.aiSettings.mockResolvedValue({
+      ...defaultAiSettings,
+      enabled: true,
+      provider: "xcli",
+      chatModel: "codex",
+      allowCloud: true,
+      isLocal: false,
+      textIsLocal: false,
+      vectorProvider: "openai_compatible",
+    });
+    let finish: (result: AskResult) => void = () => undefined;
+    mocks.api.ask.mockImplementation(() => new Promise<AskResult>((resolve) => { finish = resolve; }));
+    renderAsk();
+    await act(async () => {});
+    fireEvent.change(screen.getByLabelText("输入问题"), { target: { value: "合成测试问题" } });
+    fireEvent.click(screen.getByRole("button", { name: "提问" }));
+    expect(await screen.findByRole("alertdialog")).toHaveTextContent("本机 xcli → Codex 的云端模型");
+    expect(mocks.api.ask).not.toHaveBeenCalled();
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "确认发送" })));
+    expect(mocks.api.ask).toHaveBeenCalledWith("a", "合成测试问题", {}, "", expect.any(String), true);
+    expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
+    await act(async () => finish({ answer: "合成回答", sources: [] }));
+    expect(screen.getByText("合成回答")).toBeVisible();
+  });
+
   it("streams the answer and lists cited sources", async () => {
     const result: AskResult = {
       answer: "你们约了周末去公园 [1]",

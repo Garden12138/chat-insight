@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import { XCLI_SCAN_UNAVAILABLE } from "../aiDefaults";
 import { formatChars, runAiTask, stopAiTask, useAi, useAiTask, usesCloud } from "../ai";
 import type { Commitment, CommitmentScanOutcome, DateRange, Decision, DecisionStatus } from "../types";
 import { directionLabel, dueLabel, followupLabel, isOverdue } from "../commitments";
@@ -47,6 +48,7 @@ function matchesTab(item: Decision, tab: DecisionTab): boolean {
 
 export function ChatMemoryPanel({ accountId, chatId, chatName, chatKind, range, revision, onOpenDetail, onOpenCommitments }: ChatMemoryPanelProps) {
   const { settings, confirmCloud } = useAi();
+  const scanUnavailable = settings.provider === "xcli";
   const isGroup = chatKind === "group";
   const [commitments, setCommitments] = useState<Commitment[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
@@ -78,7 +80,7 @@ export function ChatMemoryPanel({ accountId, chatId, chatName, chatKind, range, 
 
   async function scan(kind: "commitment" | "decision") {
     const running = kind === "commitment" ? commitmentScan.running : decisionScan.running;
-    if (running) return;
+    if (running || scanUnavailable) return;
     let detail = kind === "commitment"
       ? `“${chatName}”在当前日期范围内含有约定线索的聊天，以及这里未完成的约定。`
       : `“${chatName}”在当前日期范围内含有决策线索的聊天，以及这个群里仍然有效的决定和待定事项。`;
@@ -93,7 +95,7 @@ export function ChatMemoryPanel({ accountId, chatId, chatName, chatKind, range, 
         return;
       }
     }
-    const consent = await confirmCloud({ title: kind === "commitment" ? "发送聊天以找出约定" : "发送群聊以找出决策", detail });
+    const consent = await confirmCloud({ title: kind === "commitment" ? "发送聊天以找出约定" : "发送群聊以找出决策", detail, targets: ["text"] });
     if (consent === null) return;
     const key = kind === "commitment" ? commitmentKey : decisionKey;
     await runAiTask(key, (requestId) => kind === "commitment"
@@ -124,13 +126,14 @@ export function ChatMemoryPanel({ accountId, chatId, chatName, chatKind, range, 
         <div className="memory-actions">
           {settings.enabled && (commitmentScan.running
             ? <button type="button" className="secondary-button compact" onClick={() => stopAiTask(commitmentKey)}><Icon name="stop" />暂停约定扫描</button>
-            : <button type="button" className="secondary-button compact" onClick={() => scan("commitment")}><Icon name="sparkle" />扫描约定</button>)}
+            : <button type="button" className="secondary-button compact" disabled={scanUnavailable} onClick={() => scan("commitment")}><Icon name="sparkle" />扫描约定</button>)}
           {isGroup && settings.enabled && (decisionScan.running
             ? <button type="button" className="secondary-button compact" onClick={() => stopAiTask(decisionKey)}><Icon name="stop" />暂停决策扫描</button>
-            : <button type="button" className="primary-button compact" onClick={() => scan("decision")}><Icon name="sparkle" />扫描决策</button>)}
+            : <button type="button" className="primary-button compact" disabled={scanUnavailable} onClick={() => scan("decision")}><Icon name="sparkle" />扫描决策</button>)}
         </div>
       </div>
       <div className="chat-memory-body">
+        {settings.enabled && scanUnavailable && <InlineNotice tone="info">{XCLI_SCAN_UNAVAILABLE}</InlineNotice>}
         {error && <InlineNotice tone="error">{error}</InlineNotice>}
         {(commitmentScan.running || decisionScan.running) && <p className="stream-status" role="status"><span className="spinner" />{commitmentScan.status || decisionScan.status || "正在扫描…"}</p>}
         {!commitmentScan.running && commitmentScan.error && <p className="ai-error">{commitmentScan.error}</p>}

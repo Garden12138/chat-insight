@@ -99,6 +99,15 @@ describe("chat memory panel", () => {
     expect(mocks.api.updateDecision).toHaveBeenLastCalledWith("a", 4, { status: "closed" });
   });
 
+  it("disables commitment and decision scans with xcli", async () => {
+    mocks.api.aiSettings.mockResolvedValue({ ...defaultAiSettings, enabled: true, provider: "xcli" });
+    renderPanel();
+    expect(await screen.findByRole("button", { name: "扫描约定" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "扫描决策" })).toBeDisabled();
+    expect(screen.getByText(/xcli 每次调用都要启动 CLI/)).toBeVisible();
+    expect(mocks.api.scanDecisions).not.toHaveBeenCalled();
+  });
+
   it("opens the source message", async () => {
     renderPanel();
     const card = (await screen.findByRole("heading", { name: "周五前完成设计稿" })).closest("li") as HTMLElement;

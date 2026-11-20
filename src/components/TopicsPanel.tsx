@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api";
-import { formatChars, getAiTask, newRequestId, runAiTask, setAiTaskResult, stopAiTask, useAi, useAiTask, usesCloud } from "../ai";
+import { formatChars, getAiTask, hasVectorService, newRequestId, runAiTask, setAiTaskResult, stopAiTask, useAi, useAiTask, usesCloud } from "../ai";
 import type { DateRange, KeywordCount, TopicsResult } from "../types";
 import { formatDateTime } from "../utils";
 import { Icon } from "./Icons";
@@ -34,30 +34,33 @@ export function TopicsPanel({ accountId, chatId, chatName, range, revision, keyw
   const key = `topics:${accountId}:${chatId}:${range.from ?? ""}:${range.to ?? ""}`;
   const { status, running, result, error } = useAiTask<TopicsResult>(key);
   const [showKeywords, setShowKeywords] = useState(false);
+  const vectorsAvailable = hasVectorService(settings);
+  const aiOn = settings.enabled && vectorsAvailable;
 
   useEffect(() => {
     setShowKeywords(false);
-    if (suspendAutoAi || !settings.enabled || getAiTask(key).running) return;
+    if (suspendAutoAi || !aiOn || getAiTask(key).running) return;
     let active = true;
     api.chatTopics(accountId, chatId, range, newRequestId(), "cached")
       .then((value) => { if (active) setAiTaskResult(key, value ?? undefined); })
       .catch(() => undefined);
     return () => { active = false; };
-  }, [key, accountId, chatId, range, revision, settings.enabled, settings.chatModel, settings.embedModel, suspendAutoAi]);
+  }, [key, accountId, chatId, range, revision, aiOn, settings.chatModel, settings.embedModel, suspendAutoAi]);
 
   async function analyze(mode: "generate" | "refresh") {
-    let detail = `“${chatName}”里还没建立索引的消息，以及归纳时用到的聊天摘录。`;
-    if (usesCloud(settings)) {
+    if (!aiOn) return;
+    const xcli = settings.provider === "xcli";
+    let detail = `“${chatName}”里还没建立索引的消息${xcli ? "。" : "，以及归纳时用到的聊天摘录。"}`;
+    if (usesCloud(settings, ["vectors"])) {
       const estimate = await api.aiEstimate(accountId, {}, chatId);
-      detail = `“${chatName}”共 ${estimate.messages.toLocaleString("zh-CN")} 条文本（约 ${formatChars(estimate.chars)}），以及归纳时用到的聊天摘录。`;
+      detail = `“${chatName}”共 ${estimate.messages.toLocaleString("zh-CN")} 条文本（约 ${formatChars(estimate.chars)}）${xcli ? "，用于更新向量索引。" : "，以及归纳时用到的聊天摘录。"}`;
     }
-    const consent = await confirmCloud({ title: "发送聊天记录以归纳话题", detail });
+    const consent = await confirmCloud({ title: "发送聊天记录以归纳话题", detail, targets: ["vectors"] });
     if (consent === null) return;
     setShowKeywords(false);
     await runAiTask(key, (requestId) => api.chatTopics(accountId, chatId, range, requestId, mode, consent));
   }
 
-  const aiOn = settings.enabled;
   const showTopics = aiOn && !showKeywords && (running || !!result);
 
   return (
@@ -92,6 +95,7 @@ export function TopicsPanel({ accountId, chatId, chatName, range, revision, keyw
       ) : (
         <>
           {aiOn && !result && !showKeywords && <p className="ai-panel-hint topic-hint">点「归纳话题」，把这段聊天归成几个主题。</p>}
+          {settings.enabled && !vectorsAvailable && <p className="ai-panel-hint topic-hint">配置向量服务后可归纳话题。</p>}
           <KeywordCloud keywords={keywords} />
         </>
       )}

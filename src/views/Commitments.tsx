@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api";
+import { XCLI_SCAN_UNAVAILABLE } from "../aiDefaults";
 import { formatChars, runAiTask, stopAiTask, useAi, useAiTask, usesCloud, useSessionState } from "../ai";
 import { directionLabel, dueLabel, followupLabel, isOverdue, scanSummary, sortOpen } from "../commitments";
 import type { ChatListItem, Commitment, CommitmentCounts, CommitmentDirection, CommitmentPatch, CommitmentScanOutcome, CommitmentStatus, DateRange } from "../types";
@@ -46,6 +47,7 @@ interface Draft {
 
 export function Commitments({ accountId, range, revision, onCountsChange, onOpenDetail, onOpenSettings }: CommitmentsProps) {
   const { settings, confirmCloud } = useAi();
+  const scanUnavailable = settings.provider === "xcli";
   const [tab, setTab] = useSessionState<Tab>(`commitments-tab:${accountId}`, "suggested");
   const [direction, setDirection] = useSessionState<CommitmentDirection | "">(`commitments-direction:${accountId}`, "");
   const [chatId, setChatId] = useSessionState(`commitments-chat:${accountId}`, "");
@@ -81,6 +83,7 @@ export function Commitments({ accountId, range, revision, onCountsChange, onOpen
   useEffect(() => { void reload(); }, [reload, revision, scan.running]);
 
   async function startScan() {
+    if (scanUnavailable) return;
     const scope = chatId ? `“${chats.find((chat) => chat.id === chatId)?.displayName ?? "所选聊天"}”` : "所有聊天";
     let detail = `${scope}在当前日期范围内含有约定线索的聊天，以及未完成约定的标题。`;
     if (usesCloud(settings)) {
@@ -92,7 +95,7 @@ export function Commitments({ accountId, range, revision, onCountsChange, onOpen
         return;
       }
     }
-    const consent = await confirmCloud({ title: "发送聊天以找出约定", detail });
+    const consent = await confirmCloud({ title: "发送聊天以找出约定", detail, targets: ["text"] });
     if (consent === null) return;
     await runAiTask(scanKey, (requestId) => api.scanCommitments(accountId, range, chatId, requestId, consent), { reset: true });
   }
@@ -116,10 +119,10 @@ export function Commitments({ accountId, range, revision, onCountsChange, onOpen
           <div><p className="eyebrow">COMMITMENT RADAR</p><h2>从聊天里找出约定</h2></div>
           {settings.enabled && (scan.running
             ? <button type="button" className="secondary-button compact" onClick={() => stopAiTask(scanKey)}><Icon name="stop" />暂停</button>
-            : <button type="button" className="primary-button compact" onClick={startScan}><Icon name="sparkle" />扫描聊天</button>)}
+            : <button type="button" className="primary-button compact" disabled={scanUnavailable} onClick={startScan}><Icon name="sparkle" />扫描聊天</button>)}
         </div>
         <div className="commitment-scan-body">
-          {settings.enabled ? (
+          {settings.enabled ? scanUnavailable ? <InlineNotice tone="info">{XCLI_SCAN_UNAVAILABLE}</InlineNotice> : (
             <>
               <div className="commitment-scan-row">
                 <p className="ai-panel-hint">从当前日期范围找出答应过的事，先放进「待确认」。</p>

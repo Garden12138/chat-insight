@@ -314,7 +314,7 @@ export default function App() {
         </nav>
         <div className="sidebar-spacer" />
         <button type="button" className="guide-button" onClick={showGuide}><Icon name="help" /><span>使用指引</span></button>
-        {usesCloud(aiSettings)
+        {usesCloud(aiSettings, ["text", "vectors"])
           ? <div className="local-badge cloud" data-guide="privacy"><span /><div><strong>已启用云端 AI</strong><small>确认后发送至 {aiServiceHost(aiSettings)}</small></div></div>
           : <div className="local-badge" data-guide="privacy"><span /><div><strong>仅在本机</strong><small>数据未上传</small></div></div>}
         <p className="version">Chat Insight v{version}</p>

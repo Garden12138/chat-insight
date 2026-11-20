@@ -5,10 +5,11 @@ import { Icon } from "./Icons";
 interface CloudConsentProps {
   host: string;
   request: ConsentRequest;
+  notice?: string;
   onDecide: (accepted: boolean) => void;
 }
 
-export function CloudConsent({ host, request, onDecide }: CloudConsentProps) {
+export function CloudConsent({ host, request, notice, onDecide }: CloudConsentProps) {
   const cancelRef = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
@@ -28,6 +29,7 @@ export function CloudConsent({ host, request, onDecide }: CloudConsentProps) {
         <h2 id="consent-title">{request.title}</h2>
         <p>这次请求会把以下内容发送到 <strong>{host}</strong>，由该服务处理：</p>
         <p className="consent-detail">{request.detail}</p>
+        {notice && <p className="subtle">{notice}</p>}
         <p className="subtle">发送后的数据受该服务的隐私政策约束，Chat Insight 无法撤回。</p>
         <div className="modal-actions">
           <button ref={cancelRef} type="button" className="secondary-button" onClick={() => onDecide(false)}>取消</button>

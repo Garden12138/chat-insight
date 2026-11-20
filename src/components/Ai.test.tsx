@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => ({
     aiSettings: vi.fn(),
     saveAiSettings: vi.fn(),
     testAi: vi.fn(),
-    xcliPrivacy: vi.fn(),
+    buildAiIndex: vi.fn(),
     aiIndexStatus: vi.fn(),
     onAiIndexProgress: vi.fn(),
     chatTopics: vi.fn(),
@@ -29,7 +29,18 @@ const cloudSettings: AiSettingsView = {
   baseUrl: "https://api.example.com/v1",
   allowCloud: true,
   isLocal: false,
+  textIsLocal: false,
+  vectorsIsLocal: false,
   host: "api.example.com",
+};
+
+const xcliSettings: AiSettingsView = {
+  ...cloudSettings,
+  provider: "xcli",
+  baseUrl: "xcli",
+  chatModel: "codex",
+  vectorProvider: "openai_compatible",
+  vectorsIsLocal: true,
 };
 
 beforeEach(() => {
@@ -52,44 +63,47 @@ describe("Markdown", () => {
   });
 });
 
-function ConsentProbe() {
+function ConsentProbe({ targets = ["text"] }: { targets?: ("text" | "vectors")[] }) {
   const { confirmCloud } = useAi();
   const [result, setResult] = useState<string>("pending");
   return (
-    <button type="button" onClick={async () => setResult(String(await confirmCloud({ title: "发送聊天记录以生成摘要", detail: "120 条文本消息" })))}>
+    <button type="button" onClick={async () => setResult(String(await confirmCloud({ title: "发送聊天记录以生成摘要", detail: "120 条文本消息", targets })))}>
       ask:{result}
     </button>
   );
 }
 
 describe("cloud consent", () => {
-  it("treats a loopback xcli gateway as cloud until both selected model routes are verified local", async () => {
-    mocks.api.aiSettings.mockResolvedValue({ ...cloudSettings, provider: "xcli", baseUrl: "http://127.0.0.1:18741/v1", host: "127.0.0.1", isLocal: true });
-    mocks.api.xcliPrivacy.mockRejectedValue(new Error("catalog unavailable"));
-    render(<AiProvider><ConsentProbe /></AiProvider>);
+  it("shows the xcli retention notice for text and skips consent for local vectors", async () => {
+    mocks.api.aiSettings.mockResolvedValue(xcliSettings);
+    const view = render(<AiProvider><ConsentProbe targets={["vectors"]} /></AiProvider>);
     await act(async () => {});
     fireEvent.click(screen.getByRole("button", { name: "ask:pending" }));
-    expect(await screen.findByRole("alertdialog")).toHaveTextContent("xcli 配置的上游模型");
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    expect(await screen.findByRole("button", { name: "ask:null" })).toBeVisible();
-    mocks.api.xcliPrivacy.mockResolvedValue({ chatCloud: false, embeddingCloud: false, chatLocation: "local", embeddingLocation: "local" });
-    fireEvent.click(screen.getByRole("button", { name: "ask:null" }));
     expect(await screen.findByRole("button", { name: "ask:false" })).toBeVisible();
     expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+
+    view.rerender(<AiProvider><ConsentProbe targets={["vectors", "text"]} /></AiProvider>);
+    fireEvent.click(screen.getByRole("button", { name: "ask:false" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("本机 xcli → Codex 的云端模型");
+    expect(dialog).toHaveTextContent("xcli 和所用 CLI 会在本机保存本次发送内容的副本");
+    expect(dialog).toHaveTextContent("~/.xcli/chat-insight/");
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(await screen.findByRole("button", { name: "ask:null" })).toBeVisible();
   });
 
-  it("does not infer local inference from malformed or partially remote gateway metadata", async () => {
-    mocks.api.aiSettings.mockResolvedValue({ ...cloudSettings, provider: "xcli", baseUrl: "http://127.0.0.1:18741/v1" });
-    mocks.api.xcliPrivacy.mockResolvedValue({});
-    render(<AiProvider><ConsentProbe /></AiProvider>);
+  it("names the remote vector service and omits xcli retention for vector-only work", async () => {
+    mocks.api.aiSettings.mockResolvedValue({
+      ...xcliSettings,
+      vectorProvider: "bailian",
+      vectorsIsLocal: false,
+    });
+    render(<AiProvider><ConsentProbe targets={["vectors"]} /></AiProvider>);
     await act(async () => {});
     fireEvent.click(screen.getByRole("button", { name: "ask:pending" }));
-    expect(await screen.findByRole("alertdialog")).toBeVisible();
-    fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    await screen.findByRole("button", { name: "ask:null" });
-    mocks.api.xcliPrivacy.mockResolvedValue({ chatCloud: false, embeddingCloud: true });
-    fireEvent.click(screen.getByRole("button", { name: "ask:null" }));
-    expect(await screen.findByRole("alertdialog")).toBeVisible();
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog).toHaveTextContent("阿里云百炼");
+    expect(dialog).not.toHaveTextContent("xcli 和所用 CLI");
   });
   it("resolves immediately for local models", async () => {
     render(<AiProvider><ConsentProbe /></AiProvider>);
@@ -124,6 +138,7 @@ describe("cloud consent", () => {
     const dialog = await screen.findByRole("alertdialog");
     expect(dialog).toHaveTextContent("api.example.com");
     expect(dialog).toHaveTextContent("120 条文本消息");
+    expect(dialog).not.toHaveTextContent("xcli 和所用 CLI");
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
     expect(await screen.findByRole("button", { name: "ask:null" })).toBeVisible();
 
@@ -157,6 +172,63 @@ describe("TopicsPanel", () => {
 });
 
 describe("AiSettings", () => {
+  it("configures xcli and saves its vector key separately", async () => {
+    const userAgent = vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Macintosh; Mac OS X");
+    try {
+      mocks.api.saveAiSettings.mockResolvedValue(xcliSettings);
+      mocks.api.aiIndexStatus.mockResolvedValue({ model: "bge-m3", running: false, indexedChunks: 0, pendingMessages: 5, totalTextMessages: 5 });
+      render(<AiProvider><AiSettings accountId="a" /></AiProvider>);
+      await act(async () => {});
+      fireEvent.click(screen.getByRole("radio", { name: "xcli（本机 CLI）" }));
+      expect(screen.getByLabelText("xcli 可执行文件")).toHaveValue("xcli");
+      expect(screen.getByLabelText("生成用的 CLI")).toHaveValue("auto");
+      expect(screen.getByRole("option", { name: "Cursor" })).toBeDisabled();
+      expect(screen.queryByLabelText("对话模型")).not.toBeInTheDocument();
+      const vector = screen.getByLabelText("向量服务");
+      fireEvent.change(vector, { target: { value: "openai_compatible" } });
+      expect(screen.getByLabelText("向量模型")).toHaveValue("bge-m3");
+      fireEvent.change(vector, { target: { value: "bailian" } });
+      expect(screen.getByLabelText("向量模型")).toHaveValue("text-embedding-v3");
+      fireEvent.change(screen.getByLabelText("向量 API Key"), { target: { value: "synthetic-key" } });
+      fireEvent.click(screen.getByLabelText("允许使用云端模型服务"));
+      fireEvent.click(screen.getByRole("button", { name: "保存设置" }));
+      await waitFor(() => expect(mocks.api.saveAiSettings).toHaveBeenCalledWith(expect.objectContaining({
+        provider: "xcli",
+        baseUrl: "xcli",
+        chatModel: "auto",
+        vectorProvider: "bailian",
+        allowCloud: true,
+        vectorApiKey: "synthetic-key",
+        apiKey: undefined,
+      })));
+    } finally {
+      userAgent.mockRestore();
+    }
+  });
+
+  it("hides the xcli card on Windows", async () => {
+    const userAgent = vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Windows NT 10.0");
+    try {
+      render(<AiProvider><AiSettings accountId="a" /></AiProvider>);
+      await act(async () => {});
+      expect(screen.queryByRole("radio", { name: "xcli（本机 CLI）" })).not.toBeInTheDocument();
+    } finally {
+      userAgent.mockRestore();
+    }
+  });
+
+  it("starts an index with xcli and local vectors without a cloud confirmation", async () => {
+    mocks.api.aiSettings.mockResolvedValue(xcliSettings);
+    mocks.api.aiIndexStatus.mockResolvedValue({ model: "bge-m3", running: false, indexedChunks: 0, pendingMessages: 5, totalTextMessages: 5 });
+    mocks.api.buildAiIndex.mockResolvedValue({});
+    render(<AiProvider><AiSettings accountId="a" /></AiProvider>);
+    const build = await screen.findByRole("button", { name: "建立索引" });
+    await waitFor(() => expect(build).toBeEnabled());
+    fireEvent.click(build);
+    await waitFor(() => expect(mocks.api.buildAiIndex).toHaveBeenCalledWith("a", false, false));
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+  });
+
   it("selects 阿里云百炼 with an editable namespace endpoint and required API key", async () => {
     render(<AiProvider><AiSettings accountId="a" /></AiProvider>);
     await act(async () => {});

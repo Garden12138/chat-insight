@@ -537,6 +537,7 @@ pub async fn ai_chat_topics(
             &task_account,
             &task_chat,
             &task_range,
+            settings.provider != AiProvider::Xcli,
         )
     })
     .await?;
