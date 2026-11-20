@@ -112,10 +112,7 @@ pub(super) struct IsolatedXcli {
 }
 
 impl IsolatedXcli {
-    pub(super) fn prepare(executable: &Path, agent: &str) -> AppResult<Self> {
-        if !matches!(agent, "auto" | "codex") {
-            return Err(AppError::Ai("当前仅支持具有读取隔离的 Codex CLI".into()));
-        }
+    pub(super) fn prepare(executable: &Path) -> AppResult<Self> {
         let home = env::var_os("HOME")
             .map(PathBuf::from)
             .ok_or_else(|| AppError::Ai("无法定位已登录 CLI 的主目录".into()))?;
@@ -154,18 +151,16 @@ impl IsolatedXcli {
         let codex = codex
             .canonicalize()
             .map_err(|_| AppError::Ai("无法读取已安装的 Codex CLI".into()))?;
-        let auth = auth.canonicalize().map_err(|_| {
-            AppError::Ai("未找到可复用的 Codex 登录文件，请检查当前 CLI 的登录存储方式".into())
-        })?;
-        let metadata = auth.metadata()?;
+        let auth = auth.canonicalize().map_err(|_| codex_login_file_error())?;
+        let metadata = auth.metadata().map_err(|_| codex_login_file_error())?;
         if !metadata.is_file()
             || metadata.nlink() != 1
             || auth.file_name() != Some("auth.json".as_ref())
         {
-            return Err(AppError::Ai(
-                "当前 Codex 登录文件无法在读取隔离中安全复用".into(),
-            ));
+            return Err(codex_login_file_error());
         }
+        // Check read access without reading or copying the credential.
+        fs::File::open(&auth).map_err(|_| codex_login_file_error())?;
         DirBuilder::new().mode(0o700).recursive(true).create(runs)?;
         let root = runs
             .canonicalize()?
@@ -260,6 +255,12 @@ impl IsolatedXcli {
     }
 }
 
+fn codex_login_file_error() -> AppError {
+    AppError::Ai(
+        r#"需要 Codex 使用文件凭据存储。请在 ~/.codex/config.toml（设置了 CODEX_HOME 时为 $CODEX_HOME/config.toml）的顶层设置 cli_auth_credentials_store = "file"，运行 codex login，然后重试。登录文件 auth.json 必须是可读取且没有硬链接的普通文件。"#.into(),
+    )
+}
+
 impl Drop for IsolatedXcli {
     fn drop(&mut self) {
         // Remove the link, leaving the original login and its renewal lock with Codex.
@@ -279,6 +280,31 @@ mod tests {
     use std::fs;
     use std::os::unix::fs::PermissionsExt;
     use tempfile::tempdir;
+
+    #[test]
+    fn explains_file_login_for_missing_and_unsafe_credentials() {
+        let fixture = tempdir().unwrap();
+        let executable = fixture.path().join("xcli");
+        fs::write(&executable, b"synthetic executable").unwrap();
+        let auth = fixture.path().join("auth.json");
+        let runs = fixture.path().join("runs");
+        for create_directory in [false, true] {
+            if create_directory {
+                fs::create_dir(&auth).unwrap();
+            }
+            let error = IsolatedXcli::prepare_in(&executable, &executable, &auth, &runs, None)
+                .err()
+                .expect("invalid Codex login file should be rejected")
+                .to_string();
+            assert!(error.contains("~/.codex/config.toml"), "{error}");
+            assert!(
+                error.contains(r#"cli_auth_credentials_store = "file""#),
+                "{error}"
+            );
+            assert!(error.contains("codex login"), "{error}");
+            assert!(!runs.exists());
+        }
+    }
 
     #[test]
     fn allows_only_the_configured_proxy_to_receive_loopback_connections() {

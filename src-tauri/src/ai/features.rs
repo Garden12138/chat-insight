@@ -794,7 +794,7 @@ mod tests {
         let db = seeded_db(&["合成测试消息：火星基地演练"]);
         let dir = tempdir().unwrap();
         let executable = make_fake_xcli(dir.path(), "ok");
-        let client = AiClient::Xcli(XcliClient::with_fake_executable(executable, "auto"));
+        let client = AiClient::Xcli(XcliClient::with_fake_executable(executable));
         assert_eq!(client.embed_model(), NO_VECTORS);
         assert_eq!(
             db.ai_index_counts("account", None, client.embed_model())

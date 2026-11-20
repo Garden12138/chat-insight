@@ -155,14 +155,13 @@ Intel Mac，或安装包里没有微信数据桥时，改为「导入 Chat Insig
 - 想检验约定识别在你的模型上的效果，可以用仓库里的合成对话评估精确率和召回率：
   `CHAT_INSIGHT_EVAL_MODEL=qwen3:8b cargo test --manifest-path src-tauri/Cargo.toml extraction_eval -- --ignored --nocapture`。
 
-#### 通过 xcli 使用本机 CLI
+#### 通过 xcli 使用本机 Codex
 
-- 在 macOS 安装 [xcli v2.0.1+](https://github.com/Garden12138/xcli/releases)（建议放在 `~/.local/bin/xcli`）。首版支持使用文件存储凭据的 Codex，会复用 CLI 当前登录和额度。
-- 打开“数据管理 → AI 设置”，选择“xcli（本机 CLI）”，允许云端服务，选择“自动”或“Codex”，再点“保存并测试连接”。
-- 可用问答、聊天摘要、事件回顾和年度报告。配置向量服务后还可建立索引、语义检索和归纳话题。本机 Ollama 可用 `ollama pull bge-m3` 安装向量模型。
-- 未配置向量服务时，问答使用关键词检索。约定和决策扫描请使用本机模型或阿里云百炼。
-- 发送聊天内容前逐次确认。xcli 和 Codex 在系统隔离下运行，只收到本次请求选定的数据。任务会在本机留下副本，默认位于 `~/.xcli/chat-insight/`，可手动删除对应任务目录。
-- 生成通常需要 10～60 秒，完成后显示结果。在问答、聊天摘要和事件回顾中可以停止生成。xcli 文本生成暂不支持 Windows 或 Linux。
+- macOS 安装 [xcli v2.0.1+](https://github.com/Garden12138/xcli/releases) 和 Codex CLI，再在“数据管理 → AI 设置”选择“xcli（本机 CLI）”。目前仅支持 Codex。
+- 复用 Codex 的文件登录。在 `~/.codex/config.toml`（或 `$CODEX_HOME/config.toml`）顶层设置 `cli_auth_credentials_store = "file"`，若还没有文件登录请运行 `codex login`。 [Codex 官方认证文档](https://developers.openai.com/codex/auth#credential-storage)
+- 读取隔离阻止 xcli 和 Codex 读取聊天数据库或其他会话。确认发送聊天内容时会显示本机副本的位置，默认为 `~/.xcli/chat-insight/`。
+- 可单独配置 Ollama 或阿里云百炼向量服务。未配置时问答使用关键词检索，承诺和决定扫描在 xcli 下不可用。
+- 问答、会话总结、群事件回顾和年度报告均可停止生成。Windows 和 Linux 暂不支持 xcli。
 
 macOS Apple Silicon 首次初始化会运行上游 `wxkey bootstrap`。它可能要求完全磁盘访问权限、
 退出并重新打开微信，并显示系统管理员授权窗口。界面会在执行前明确提示这些行为。

@@ -1,5 +1,5 @@
 use super::settings::AiSettings;
-use super::xcli::{vectors_unconfigured, XcliClient};
+use super::xcli::{vectors_unconfigured, XcliClient, XCLI_AGENT};
 use crate::error::{AppError, AppResult};
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -309,7 +309,7 @@ impl AiClient {
             Self::Xcli(client) => Ok(client
                 .agents()?
                 .into_iter()
-                .filter(|agent| agent.available)
+                .filter(|agent| agent.available && agent.name == XCLI_AGENT)
                 .map(|agent| agent.name)
                 .collect()),
         }
@@ -578,7 +578,7 @@ mod tests {
         );
         let dir = tempfile::tempdir().unwrap();
         let executable = super::super::xcli::tests::make_fake_xcli(dir.path(), "ok");
-        let mut xcli = XcliClient::with_fake_executable(executable, "auto");
+        let mut xcli = XcliClient::with_fake_executable(executable);
         xcli.vectors = Some(client(url));
         let ai = AiClient::Xcli(xcli);
         ai.prepare_index().unwrap();

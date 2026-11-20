@@ -25,7 +25,7 @@ export const defaultAiSettings: AiSettingsView = {
 
 export const xcliDefaults = {
   baseUrl: "xcli",
-  chatModel: "auto",
+  chatModel: "codex",
   embedModel: "bge-m3",
   vectorProvider: null,
   vectorBaseUrl: DEFAULT_BASE_URL,
@@ -35,15 +35,6 @@ export const XCLI_SCAN_UNAVAILABLE = "xcli 每次调用都要启动 CLI，不适
 
 export function normalizeProvider(provider?: AiProvider): AiProvider {
   return provider === "bailian" || provider === "xcli" ? provider : "openai_compatible";
-}
-
-export function xcliAgentName(value: string): string {
-  switch (value) {
-    case "codex": return "Codex";
-    case "antigravity": return "Antigravity";
-    case "cursor": return "Cursor";
-    default: return "自动选择的 CLI";
-  }
 }
 
 export function aiServiceHost(settings: Pick<AiSettingsView, "provider" | "host">): string {

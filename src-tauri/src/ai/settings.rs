@@ -1,4 +1,4 @@
-use super::xcli::normalize_xcli_agent;
+use super::xcli::XCLI_AGENT;
 use crate::error::{AppError, AppResult};
 use crate::wechat_account::write_private_file;
 use serde::{Deserialize, Serialize};
@@ -174,12 +174,12 @@ impl SettingsStore {
             .ok()
             .and_then(|raw| serde_json::from_str(&raw).ok())
             .unwrap_or_default();
-        if settings.provider == AiProvider::Xcli
-            && (settings.base_url.starts_with("http://")
-                || settings.base_url.starts_with("https://"))
-        {
+        if settings.provider != AiProvider::Xcli {
+            return settings;
+        }
+        settings.chat_model = XCLI_AGENT.into();
+        if settings.base_url.starts_with("http://") || settings.base_url.starts_with("https://") {
             settings.base_url = "xcli".into();
-            settings.chat_model = normalize_xcli_agent(&settings.chat_model).into();
             settings.vector_provider = None;
             // Leave the migration pending on disk if the legacy identity could not be removed.
             if remove_file_if_present(self.dir.join(LEGACY_IDENTITY_FILE)).is_ok() {
@@ -270,7 +270,7 @@ impl SettingsStore {
             if settings.base_url.is_empty() {
                 settings.base_url = "xcli".into();
             }
-            settings.chat_model = normalize_xcli_agent(&settings.chat_model).into();
+            settings.chat_model = XCLI_AGENT.into();
             settings.vector_base_url = settings.vector_base_url.trim().trim_end_matches('/').into();
             let bailian_vectors = settings.vector_provider == Some(AiProvider::Bailian);
             if settings.vector_base_url.is_empty() {
@@ -402,7 +402,7 @@ mod tests {
 
         let settings = store.load();
         assert_eq!(settings.base_url, "xcli");
-        assert_eq!(settings.chat_model, "auto");
+        assert_eq!(settings.chat_model, "codex");
         assert_eq!(settings.vector_provider, None);
         assert_eq!(settings.vector_base_url, DEFAULT_BASE_URL);
         assert!(!identity_path.exists());
@@ -412,6 +412,26 @@ mod tests {
             settings
         );
         assert_eq!(store.load(), settings);
+    }
+
+    #[test]
+    fn loads_saved_xcli_choices_as_codex_without_changing_the_vector_service() {
+        let temporary = tempdir().unwrap();
+        let store = SettingsStore::new(temporary.path().join("ai"));
+        fs::create_dir(&store.dir).unwrap();
+        for model in ["auto", "antigravity", "cursor", "codex"] {
+            let stored = AiSettings {
+                provider: AiProvider::Xcli,
+                base_url: "xcli".into(),
+                chat_model: model.into(),
+                vector_provider: Some(AiProvider::Bailian),
+                ..AiSettings::default()
+            };
+            fs::write(store.settings_path(), serde_json::to_vec(&stored).unwrap()).unwrap();
+            let settings = store.load();
+            assert_eq!(settings.chat_model, "codex");
+            assert_eq!(settings.vector_provider, Some(AiProvider::Bailian));
+        }
     }
 
     #[test]
@@ -494,7 +514,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(view.settings.base_url, "xcli");
-        assert_eq!(view.settings.chat_model, "auto");
+        assert_eq!(view.settings.chat_model, "codex");
         assert_eq!(view.settings.vector_base_url, BAILIAN_BASE_URL);
         assert_eq!(view.settings.embed_model, BAILIAN_EMBED_MODEL);
         assert!(!view.text_is_local);

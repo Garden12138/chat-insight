@@ -77,7 +77,7 @@ export function Report({ accountId, revision, onOpenDetail, onOpenSettings }: Re
   async function generate() {
     if (!insights) return;
     const targetYear = insights.year;
-    await runAiTask(reportKey, (requestId) => api.yearReport(accountId, targetYear, requestId, report ? "refresh" : "generate", cloud && anonymize), { cancellable: settings.provider !== "xcli" });
+    await runAiTask(reportKey, (requestId) => api.yearReport(accountId, targetYear, requestId, report ? "refresh" : "generate", cloud && anonymize));
   }
 
   const monthlyOption = useMemo<EChartsOption>(() => {

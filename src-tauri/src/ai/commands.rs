@@ -129,11 +129,7 @@ pub async fn ai_test_connection(ai: State<'_, AiState>) -> Result<AiTestResult, 
             client.list_models().unwrap_or_default()
         };
         let chat_model_found = if settings.provider == AiProvider::Xcli {
-            if settings.chat_model == "auto" {
-                !models.is_empty()
-            } else {
-                model_listed(&models, &settings.chat_model)
-            }
+            model_listed(&models, &settings.chat_model)
         } else {
             models.is_empty() || model_listed(&models, &settings.chat_model)
         };

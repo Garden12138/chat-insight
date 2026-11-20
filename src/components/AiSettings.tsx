@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
-import { BAILIAN_BASE_URL, BAILIAN_CHAT_MODEL, BAILIAN_EMBED_MODEL, defaultAiSettings, normalizeProvider, xcliAgentName, xcliDefaults } from "../aiDefaults";
+import { BAILIAN_BASE_URL, BAILIAN_CHAT_MODEL, BAILIAN_EMBED_MODEL, defaultAiSettings, normalizeProvider, xcliDefaults } from "../aiDefaults";
 import { api } from "../api";
 import { hasVectorService, INDEX_PROGRESS_KEY, setAiTaskResult, useAi, useAiTask } from "../ai";
 import type { AiIndexProgress, AiIndexStatus, AiProvider, AiSettings as AiSettingsValues, AiSettingsView } from "../types";
@@ -10,7 +10,18 @@ import { InlineNotice } from "./States";
 type Feedback = { tone: "info" | "warning" | "error"; text: string };
 
 function pick(view: AiSettingsView): AiSettingsValues {
-  return { provider: normalizeProvider(view.provider), enabled: view.enabled, baseUrl: view.baseUrl, chatModel: view.chatModel, embedModel: view.embedModel, vectorProvider: view.vectorProvider, vectorBaseUrl: view.vectorBaseUrl, allowCloud: view.allowCloud, autoScanCommitments: view.autoScanCommitments };
+  const provider = normalizeProvider(view.provider);
+  return {
+    provider,
+    enabled: view.enabled,
+    baseUrl: view.baseUrl,
+    chatModel: provider === "xcli" ? xcliDefaults.chatModel : view.chatModel,
+    embedModel: view.embedModel,
+    vectorProvider: view.vectorProvider,
+    vectorBaseUrl: view.vectorBaseUrl,
+    allowCloud: view.allowCloud,
+    autoScanCommitments: view.autoScanCommitments,
+  };
 }
 
 function isLocalUrl(value: string): boolean {
@@ -134,9 +145,8 @@ export function AiSettings({ accountId }: { accountId: string }) {
     try {
       const result = await api.testAi();
       if (xcli) {
-        const agents = result.models.map(xcliAgentName).join("、");
         const vectors = result.embeddingDimension ? `。向量维度 ${result.embeddingDimension}` : "";
-        const text = agents ? `可用 CLI：${agents}${vectors}` : "当前隔离配置下没有可用的 CLI";
+        const text = result.chatModelFound ? `可用 CLI：Codex${vectors}` : "当前隔离配置下 Codex 不可用";
         setFeedback({ tone: result.chatModelFound ? "info" : "warning", text });
         return;
       }
@@ -204,7 +214,7 @@ export function AiSettings({ accountId }: { accountId: string }) {
                 <label className={`provider-card ${xcli ? "active" : ""}`}>
                   <input type="radio" name="ai-provider" checked={xcli} onChange={() => setProvider("xcli")} aria-label="xcli（本机 CLI）" />
                   <strong>xcli（本机 CLI）</strong>
-                  <small>使用已登录的 CLI 生成文本</small>
+                  <small>使用已登录的 Codex 生成文本</small>
                 </label>
               )}
             </div>
@@ -215,15 +225,10 @@ export function AiSettings({ accountId }: { accountId: string }) {
                 <span>xcli 可执行文件</span>
                 <input value={form.baseUrl} onChange={(event) => update("baseUrl", event.target.value)} placeholder="xcli（默认依次从 XCLI_PATH、PATH、~/.local/bin 查找），或填写绝对路径" spellCheck={false} />
               </label>
-              <label className="field">
+              <div className="field wide">
                 <span>生成用的 CLI</span>
-                <select value={form.chatModel} onChange={(event) => update("chatModel", event.target.value)}>
-                  <option value="auto">自动（推荐）</option>
-                  <option value="codex">Codex</option>
-                  <option value="antigravity" disabled>Antigravity</option>
-                  <option value="cursor" disabled>Cursor</option>
-                </select>
-              </label>
+                <p className="ai-panel-hint">使用 Codex（Antigravity、Cursor 的登录无法在读取隔离中复用，暂不支持）</p>
+              </div>
               <label className="field">
                 <span>向量服务</span>
                 <select value={form.vectorProvider ?? ""} onChange={(event) => setVectorProvider((event.target.value || null) as AiSettingsValues["vectorProvider"])}>

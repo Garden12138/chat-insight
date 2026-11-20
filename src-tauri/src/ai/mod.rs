@@ -137,7 +137,6 @@ impl AiState {
                 });
             AiClient::Xcli(XcliClient::new(
                 resolve_xcli_executable(&settings.base_url),
-                &settings.chat_model,
                 vectors,
             ))
         } else {

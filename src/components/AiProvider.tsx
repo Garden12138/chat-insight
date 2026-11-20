@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { AiContext, INDEX_PROGRESS_KEY, isLocalAiTarget, setAiTaskResult, type ConsentRequest } from "../ai";
 import { api } from "../api";
-import { aiServiceHost, defaultAiSettings, xcliAgentName } from "../aiDefaults";
+import { aiServiceHost, defaultAiSettings } from "../aiDefaults";
 import type { AiSettingsView, AiTarget } from "../types";
 import { CloudConsent } from "./CloudConsent";
 
@@ -17,7 +17,7 @@ const XCLI_NOTICE = "xcli 和所用 CLI 会在本机保存本次发送内容的�
 
 function destination(settings: AiSettingsView, target: AiTarget): string {
   if (settings.provider !== "xcli") return aiServiceHost(settings);
-  if (target === "text") return `本机 xcli → ${xcliAgentName(settings.chatModel)} 的云端模型`;
+  if (target === "text") return "本机 xcli → Codex 的云端模型";
   if (settings.vectorProvider === "bailian") return "阿里云百炼（向量服务）";
   try {
     return `${new URL(settings.vectorBaseUrl).host}（向量服务）`;

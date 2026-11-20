@@ -16,14 +16,7 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-pub const XCLI_AGENTS: [&str; 4] = ["auto", "codex", "antigravity", "cursor"];
-
-pub fn normalize_xcli_agent(value: &str) -> &'static str {
-    XCLI_AGENTS
-        .into_iter()
-        .find(|agent| *agent == value)
-        .unwrap_or("auto")
-}
+pub(super) const XCLI_AGENT: &str = "codex";
 
 pub fn resolve_xcli_executable(configured: &str) -> AppResult<PathBuf> {
     let home = env::var_os("HOME").map(PathBuf::from);
@@ -84,7 +77,7 @@ fn find_in_path(command: &str, path_env: Option<&OsStr>) -> Option<PathBuf> {
         .find(|path| path.is_file())
 }
 
-pub fn build_xcli_request(messages: &[ChatMessage], agent: &str) -> Value {
+fn build_xcli_request(messages: &[ChatMessage]) -> Value {
     let goal = messages
         .iter()
         .map(|message| {
@@ -97,18 +90,14 @@ pub fn build_xcli_request(messages: &[ChatMessage], agent: &str) -> Value {
         })
         .collect::<Vec<_>>()
         .join("\n\n");
-    let mut request = json!({
+    json!({
         "version": 1,
         "capability": "ask",
+        "agent": XCLI_AGENT,
         "goal": goal,
         "timeout_sec": TASK_TIMEOUT_SECONDS,
         "metadata": {"app": "chat-insight"}
-    });
-    let agent = normalize_xcli_agent(agent);
-    if agent != "auto" {
-        request["agent"] = json!(agent);
-    }
-    request
+    })
 }
 
 const TASK_TIMEOUT_SECONDS: u64 = 600;
@@ -161,21 +150,15 @@ fn missing_xcli(executable: &Path) -> AppError {
 
 pub struct XcliClient {
     executable: AppResult<PathBuf>,
-    agent: &'static str,
     pub(super) vectors: Option<OpenAiCompatClient>,
     #[cfg(all(test, unix))]
     fake_executable: bool,
 }
 
 impl XcliClient {
-    pub fn new(
-        executable: AppResult<PathBuf>,
-        agent: &str,
-        vectors: Option<OpenAiCompatClient>,
-    ) -> Self {
+    pub fn new(executable: AppResult<PathBuf>, vectors: Option<OpenAiCompatClient>) -> Self {
         Self {
             executable,
-            agent: normalize_xcli_agent(agent),
             vectors,
             #[cfg(all(test, unix))]
             fake_executable: false,
@@ -183,10 +166,10 @@ impl XcliClient {
     }
 
     #[cfg(all(test, unix))]
-    pub(crate) fn with_fake_executable(executable: PathBuf, agent: &str) -> Self {
+    pub(crate) fn with_fake_executable(executable: PathBuf) -> Self {
         Self {
             fake_executable: true,
-            ..Self::new(Ok(executable), agent, None)
+            ..Self::new(Ok(executable), None)
         }
     }
 
@@ -207,7 +190,7 @@ impl XcliClient {
         }
         #[cfg(target_os = "macos")]
         {
-            isolation::IsolatedXcli::prepare(executable, self.agent).map(XcliInvocation::Isolated)
+            isolation::IsolatedXcli::prepare(executable).map(XcliInvocation::Isolated)
         }
         #[cfg(not(target_os = "macos"))]
         {
@@ -271,7 +254,7 @@ impl LlmClient for XcliClient {
     ) -> AppResult<String> {
         let invocation = self.invocation()?;
         let mut command = invocation.command();
-        let request = serde_json::to_vec(&build_xcli_request(messages, self.agent))?;
+        let request = serde_json::to_vec(&build_xcli_request(messages))?;
         let mut child = self.spawn(
             command
                 .args(["submit", "--request", "-", "--events"])
@@ -509,13 +492,6 @@ pub(super) mod tests {
         ));
     }
 
-    #[test]
-    fn normalizes_xcli_agent() {
-        for agent in ["auto", "codex", "antigravity", "cursor"] {
-            assert_eq!(normalize_xcli_agent(agent), agent);
-        }
-        assert_eq!(normalize_xcli_agent("xcli/text-default"), "auto");
-    }
     pub(crate) fn make_fake_xcli(dir: &Path, mode: &str) -> PathBuf {
         let path = dir.join("xcli");
         fs::write(dir.join("mode"), mode).unwrap();
@@ -571,7 +547,7 @@ esac
     }
 
     #[test]
-    fn request_joins_messages_and_only_pins_an_explicit_agent() {
+    fn request_joins_messages_and_pins_codex() {
         let messages = [
             ChatMessage::system("合成要求"),
             ChatMessage::user("合成问题"),
@@ -581,35 +557,24 @@ esac
             },
             ChatMessage::user("合成追问"),
         ];
-        let request = build_xcli_request(&messages, "auto");
+        let request = build_xcli_request(&messages);
         assert_eq!(
             request,
             json!({
                 "version": 1,
                 "capability": "ask",
+                "agent": "codex",
                 "goal": "【要求】\n合成要求\n\n合成问题\n\n【之前的回复】\n合成前文\n\n合成追问",
                 "timeout_sec": 600,
                 "metadata": {"app": "chat-insight"}
             })
         );
-        assert_eq!(build_xcli_request(&messages, "codex")["agent"], "codex");
-    }
-
-    #[test]
-    fn refuses_to_send_chat_when_the_launcher_has_no_read_isolation() {
-        let dir = tempdir().unwrap();
-        let client = XcliClient::new(Ok(make_fake_xcli(dir.path(), "ok")), "cursor", None);
-        let error = client
-            .chat(&[ChatMessage::user("合成问题")], &mut |_| true)
-            .unwrap_err();
-        assert!(error.to_string().contains("读取隔离"));
-        assert!(!dir.path().join("stdin.json").exists());
     }
 
     #[test]
     fn sends_request_on_stdin_and_returns_only_the_final_text() {
         let dir = tempdir().unwrap();
-        let client = XcliClient::with_fake_executable(make_fake_xcli(dir.path(), "ok"), "codex");
+        let client = XcliClient::with_fake_executable(make_fake_xcli(dir.path(), "ok"));
         let messages = [ChatMessage::user("合成问题")];
         let mut deltas = Vec::new();
         let summary = client
@@ -625,7 +590,7 @@ esac
         let request = fs::read(dir.path().join("stdin.json")).unwrap();
         assert_eq!(
             serde_json::from_slice::<Value>(&request).unwrap(),
-            build_xcli_request(&messages, "codex")
+            build_xcli_request(&messages)
         );
     }
 
@@ -636,7 +601,7 @@ esac
             ("noresult", ["退出码 3", "boom"]),
         ] {
             let dir = tempdir().unwrap();
-            let client = XcliClient::with_fake_executable(make_fake_xcli(dir.path(), mode), "auto");
+            let client = XcliClient::with_fake_executable(make_fake_xcli(dir.path(), mode));
             let error = client.chat(&[], &mut |_| true).unwrap_err().to_string();
             for fragment in expected {
                 assert!(error.contains(fragment), "{error}");
@@ -647,7 +612,7 @@ esac
     #[test]
     fn sends_sigterm_even_while_xcli_has_no_events() {
         let dir = tempdir().unwrap();
-        let client = XcliClient::with_fake_executable(make_fake_xcli(dir.path(), "hang"), "auto");
+        let client = XcliClient::with_fake_executable(make_fake_xcli(dir.path(), "hang"));
         let ready = dir.path().join("ready");
         let mut saw_ready = false;
         let error = client
@@ -671,7 +636,7 @@ esac
     #[test]
     fn lists_agents_and_reports_unconfigured_vectors() {
         let dir = tempdir().unwrap();
-        let client = XcliClient::with_fake_executable(make_fake_xcli(dir.path(), "ok"), "auto");
+        let client = XcliClient::with_fake_executable(make_fake_xcli(dir.path(), "ok"));
         let agents = client.agents().unwrap();
         assert_eq!(agents.len(), 2);
         assert_eq!(agents[0].name, "codex");

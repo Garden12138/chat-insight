@@ -181,8 +181,8 @@ describe("AiSettings", () => {
       await act(async () => {});
       fireEvent.click(screen.getByRole("radio", { name: "xcli（本机 CLI）" }));
       expect(screen.getByLabelText("xcli 可执行文件")).toHaveValue("xcli");
-      expect(screen.getByLabelText("生成用的 CLI")).toHaveValue("auto");
-      expect(screen.getByRole("option", { name: "Cursor" })).toBeDisabled();
+      expect(screen.getByText("使用 Codex（Antigravity、Cursor 的登录无法在读取隔离中复用，暂不支持）")).toBeVisible();
+      expect(screen.queryByRole("combobox", { name: "生成用的 CLI" })).not.toBeInTheDocument();
       expect(screen.queryByLabelText("对话模型")).not.toBeInTheDocument();
       const vector = screen.getByLabelText("向量服务");
       fireEvent.change(vector, { target: { value: "openai_compatible" } });
@@ -195,7 +195,7 @@ describe("AiSettings", () => {
       await waitFor(() => expect(mocks.api.saveAiSettings).toHaveBeenCalledWith(expect.objectContaining({
         provider: "xcli",
         baseUrl: "xcli",
-        chatModel: "auto",
+        chatModel: "codex",
         vectorProvider: "bailian",
         allowCloud: true,
         vectorApiKey: "synthetic-key",
@@ -204,6 +204,17 @@ describe("AiSettings", () => {
     } finally {
       userAgent.mockRestore();
     }
+  });
+
+  it("saves Codex for a legacy CLI selection and shows the file login guidance", async () => {
+    mocks.api.aiSettings.mockResolvedValue({ ...xcliSettings, chatModel: "cursor" });
+    mocks.api.saveAiSettings.mockResolvedValue(xcliSettings);
+    mocks.api.testAi.mockRejectedValue('在 ~/.codex/config.toml 中设置 cli_auth_credentials_store = "file"，再运行 codex login。');
+    render(<AiProvider><AiSettings accountId="synthetic" /></AiProvider>);
+    await screen.findByText(/使用 Codex/);
+    fireEvent.click(screen.getByRole("button", { name: "保存并测试连接" }));
+    expect(await screen.findByText(/cli_auth_credentials_store = "file"/)).toHaveTextContent("codex login");
+    expect(mocks.api.saveAiSettings).toHaveBeenCalledWith(expect.objectContaining({ chatModel: "codex" }));
   });
 
   it("hides the xcli card on Windows", async () => {

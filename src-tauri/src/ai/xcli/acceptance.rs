@@ -124,7 +124,7 @@ fn real_xcli_features_on_fixture_data() -> AppResult<()> {
             "none"
         }
     );
-    let xcli = XcliClient::new(Ok(home.join(".local/bin/xcli")), "auto", vectors);
+    let xcli = XcliClient::new(Ok(home.join(".local/bin/xcli")), vectors);
     let agents = xcli.agents()?;
     let available = agents
         .iter()
