@@ -38,7 +38,7 @@ export function AiSummaryPanel({ accountId, chatId, chatName, range, revision, s
     }
     const consent = await confirmCloud({ title: "发送聊天记录以生成摘要", detail, targets: ["text"] });
     if (consent === null) return;
-    await runAiTask(key, (requestId) => api.summarizeChat(accountId, chatId, range, requestId, mode, consent), { cancellable: settings.provider !== "xcli" });
+    await runAiTask(key, (requestId) => api.summarizeChat(accountId, chatId, range, requestId, mode, consent));
   }
 
   const { running, text, status, result, error } = task;

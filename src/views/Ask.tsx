@@ -197,7 +197,7 @@ export function Ask({ accountId, range, preset, revision, onOpenDetail, onOpenSe
       detail: `你的问题，以及从${scope}找到的相关聊天。`,
     });
     if (consent === null) return;
-    await runAiTask(askKey, (requestId) => api.ask(accountId, text, range, chatId, requestId, consent), { reset: true, label: text, cancellable: settings.provider !== "xcli" });
+    await runAiTask(askKey, (requestId) => api.ask(accountId, text, range, chatId, requestId, consent), { reset: true, label: text });
   }
 
   async function runReview(date = reviewDate, chat = reviewChatId, refresh = false) {
@@ -238,7 +238,7 @@ export function Ask({ accountId, range, preset, revision, onOpenDetail, onOpenSe
     await runAiTask(
       reviewKey,
       (requestId) => api.reviewGroupEvents(accountId, date, chat || undefined, requestId, refresh ? "refresh" : "generate", consent),
-      { reset: true, label: date, cancellable: settings.provider !== "xcli" },
+      { reset: true, label: date },
     );
   }
 

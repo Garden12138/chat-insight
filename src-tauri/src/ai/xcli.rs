@@ -12,6 +12,7 @@ use std::ffi::OsStr;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
@@ -112,6 +113,7 @@ pub fn build_xcli_request(messages: &[ChatMessage], agent: &str) -> Value {
 
 const TASK_TIMEOUT_SECONDS: u64 = 600;
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
+const CANCEL_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const AGENTS_TIMEOUT: Duration = Duration::from_secs(15);
 const STDERR_BYTES: usize = 4096;
 pub const NO_VECTORS: &str = "xcli:no-vectors";
@@ -141,8 +143,7 @@ impl XcliInvocation {
                 let mut command = Command::new(executable);
                 command
                     .env_remove("FAKE_XCLI_MODE")
-                    .env_remove("FAKE_XCLI_STDIN")
-                    .env_remove("FAKE_XCLI_CANCEL");
+                    .env_remove("FAKE_XCLI_STDIN");
                 command
             }
             #[cfg(target_os = "macos")]
@@ -260,27 +261,6 @@ impl XcliClient {
         serde_json::from_slice(&bytes)
             .map_err(|_| AppError::Ai("xcli 返回的 CLI 状态格式无效".into()))
     }
-
-    fn cancel_task(invocation: &XcliInvocation, child: &mut Child, task: &str) {
-        let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
-        if !task.is_empty() {
-            let mut command = invocation.command();
-            if let Ok(mut cancel) = command
-                .args(["cancel", task])
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
-            {
-                if !matches!(wait_for_exit(&mut cancel, deadline), Ok(Some(_))) {
-                    force_exit(&mut cancel);
-                }
-            }
-        }
-        if !matches!(wait_for_exit(child, deadline), Ok(Some(_))) {
-            force_exit(child);
-        }
-    }
 }
 
 impl LlmClient for XcliClient {
@@ -299,33 +279,38 @@ impl LlmClient for XcliClient {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped()),
         )?;
-        let stdout = child.stdout.take().expect("piped stdout");
+        let events = read_events(child.stdout.take().expect("piped stdout"));
         let stderr = read_stderr(child.stderr.take().expect("piped stderr"));
         // Read the process result even if xcli closes stdin before accepting the request.
         let _ = child.stdin.take().expect("piped stdin").write_all(&request);
         let mut task = String::new();
         let mut result = None;
-        for line in BufReader::new(stdout).split(b'\n').map_while(Result::ok) {
-            let Ok(event) = serde_json::from_slice::<Value>(&line) else {
-                continue;
+        loop {
+            let event = match events.recv_timeout(CANCEL_POLL_INTERVAL) {
+                Ok(line) => match serde_json::from_slice::<Value>(&line) {
+                    Ok(event) if event["type"].is_string() => Some(event),
+                    _ => continue,
+                },
+                Err(RecvTimeoutError::Timeout) => None,
+                Err(RecvTimeoutError::Disconnected) => break,
             };
-            let Some(kind) = event["type"].as_str() else {
-                continue;
-            };
+            if !on_delta("") {
+                drop(events);
+                terminate(&mut child);
+                return Err(cancelled());
+            }
+            let Some(event) = event else { continue };
             if task.is_empty() {
                 task = event["task"].as_str().unwrap_or_default().to_owned();
             }
-            if !on_delta("") {
-                Self::cancel_task(&invocation, &mut child, &task);
-                return Err(cancelled());
-            }
-            if kind == "task.finished" {
+            if event["type"] == "task.finished" {
                 result = Some(parse_result(&event["data"], &task));
                 break;
             }
         }
+        drop(events);
         let Some(status) = wait_for_exit(&mut child, Instant::now() + SHUTDOWN_TIMEOUT)? else {
-            Self::cancel_task(&invocation, &mut child, &task);
+            terminate(&mut child);
             return Err(AppError::Ai("xcli 在结果流结束后未退出".into()));
         };
         match result {
@@ -361,6 +346,9 @@ impl LlmClient for XcliClient {
 }
 
 fn parse_result(data: &Value, task: &str) -> AppResult<String> {
+    if data["status"] == "cancelled" {
+        return Err(cancelled());
+    }
     if data["status"] == "completed" {
         return data["summary"]
             .as_str()
@@ -392,9 +380,45 @@ fn wait_for_exit(child: &mut Child, deadline: Instant) -> io::Result<Option<Exit
     }
 }
 
+fn terminate(child: &mut Child) {
+    let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
+    #[cfg(unix)]
+    if matches!(child.try_wait(), Ok(None)) {
+        // sandbox-exec replaces itself with xcli. xcli handles SIGTERM and reaps its CLI.
+        let _ = Command::new("/bin/kill")
+            .args(["-TERM", &child.id().to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    if !matches!(wait_for_exit(child, deadline), Ok(Some(_))) {
+        force_exit(child);
+    }
+}
+
 fn force_exit(child: &mut Child) {
     let _ = child.kill();
     let _ = child.wait();
+}
+
+fn read_events(stdout: impl Read + Send + 'static) -> Receiver<Vec<u8>> {
+    let (sender, events) = mpsc::sync_channel(16);
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        let mut line = Vec::new();
+        while reader
+            .read_until(b'\n', &mut line)
+            .is_ok_and(|count| count > 0)
+        {
+            if sender.send(std::mem::take(&mut line)).is_err() {
+                // Let xcli write its final event while the caller waits for shutdown.
+                let _ = io::copy(&mut reader, &mut io::sink());
+                break;
+            }
+        }
+    });
+    events
 }
 
 fn read_stderr(mut stderr: impl Read + Send + 'static) -> JoinHandle<Vec<u8>> {
@@ -502,14 +526,8 @@ set -eu
 dir=${0%/*}
 FAKE_XCLI_MODE=${FAKE_XCLI_MODE:-$(cat "$dir/mode")}
 FAKE_XCLI_STDIN=${FAKE_XCLI_STDIN:-"$dir/stdin.json"}
-FAKE_XCLI_CANCEL=${FAKE_XCLI_CANCEL:-"$dir/cancel.txt"}
 if [ "$*" = "agents --json" ]; then
     printf '%s\n' '[{"name":"codex","available":true},{"name":"cursor","available":false}]'
-    exit 0
-fi
-if [ "$1" = "cancel" ]; then
-    printf '%s %s\n' "$1" "$2" > "$FAKE_XCLI_CANCEL"
-    kill -TERM "$(cat "$dir/pid")"
     exit 0
 fi
 [ "$*" = "submit --request - --events" ]
@@ -530,11 +548,18 @@ case "$FAKE_XCLI_MODE" in
         exit 3
         ;;
     hang)
-        printf '%s\n' "$$" > "$dir/pid"
-        trap 'exit 130' TERM
-        printf '%s\n' '{"task":"t-fake","type":"task.started","data":{}}' \
-            '{"task":"t-fake","type":"step.started","data":{}}'
-        while :; do sleep 1; done
+        on_term() {
+            printf '%s\n' 'SIGTERM' > "$dir/signal.txt"
+            printf '%s\n' '{"task":"t-fake","type":"task.finished","data":{"task_id":"t-fake","status":"cancelled"}}' |
+                tee "$dir/terminal.json"
+            exit 130
+        }
+        trap on_term TERM
+        printf '%s\n' 'ready' > "$dir/ready"
+        printf '%s\n' '{"task":"t-fake","type":"task.started","data":{}}'
+        # No events arrive during generation. End the fixture even when the test regresses.
+        for cycle in 1 2 3 4; do sleep 1; done
+        exit 3
         ;;
     *) exit 2 ;;
 esac
@@ -594,7 +619,9 @@ esac
             })
             .unwrap();
         assert_eq!(summary, "合成摘要");
-        assert_eq!(deltas, ["", "", "", "合成摘要"]);
+        assert_eq!(deltas.last().map(String::as_str), Some("合成摘要"));
+        assert!(deltas.len() >= 4);
+        assert!(deltas[..deltas.len() - 1].iter().all(String::is_empty));
         let request = fs::read(dir.path().join("stdin.json")).unwrap();
         assert_eq!(
             serde_json::from_slice::<Value>(&request).unwrap(),
@@ -618,23 +645,27 @@ esac
     }
 
     #[test]
-    fn cancels_the_task_and_waits_for_xcli_to_exit() {
+    fn sends_sigterm_even_while_xcli_has_no_events() {
         let dir = tempdir().unwrap();
         let client = XcliClient::with_fake_executable(make_fake_xcli(dir.path(), "hang"), "auto");
-        let started = Instant::now();
-        let mut count = 0;
+        let ready = dir.path().join("ready");
+        let mut saw_ready = false;
         let error = client
             .chat(&[], &mut |_| {
-                count += 1;
-                count < 2
+                if !ready.is_file() {
+                    return true;
+                }
+                !std::mem::replace(&mut saw_ready, true)
             })
             .unwrap_err();
         assert_eq!(error.to_string(), cancelled().to_string());
         assert_eq!(
-            fs::read_to_string(dir.path().join("cancel.txt")).unwrap(),
-            "cancel t-fake\n"
+            fs::read_to_string(dir.path().join("signal.txt")).unwrap(),
+            "SIGTERM\n"
         );
-        assert!(started.elapsed() < Duration::from_secs(15));
+        let terminal: Value =
+            serde_json::from_slice(&fs::read(dir.path().join("terminal.json")).unwrap()).unwrap();
+        assert_eq!(terminal["data"]["status"], "cancelled");
     }
 
     #[test]

@@ -88,7 +88,7 @@ describe("keyword search", () => {
 });
 
 describe("AI ask", () => {
-  it("confirms an xcli question with local vectors and hides cancellation while running", async () => {
+  it("confirms an xcli question with local vectors and stops it while running", async () => {
     mocks.api.aiSettings.mockResolvedValue({
       ...defaultAiSettings,
       enabled: true,
@@ -99,8 +99,8 @@ describe("AI ask", () => {
       textIsLocal: false,
       vectorProvider: "openai_compatible",
     });
-    let finish: (result: AskResult) => void = () => undefined;
-    mocks.api.ask.mockImplementation(() => new Promise<AskResult>((resolve) => { finish = resolve; }));
+    let stop: (error: Error) => void = () => undefined;
+    mocks.api.ask.mockImplementation(() => new Promise<AskResult>((_, reject) => { stop = reject; }));
     renderAsk();
     await act(async () => {});
     fireEvent.change(screen.getByLabelText("输入问题"), { target: { value: "合成测试问题" } });
@@ -109,9 +109,11 @@ describe("AI ask", () => {
     expect(mocks.api.ask).not.toHaveBeenCalled();
     await act(async () => fireEvent.click(screen.getByRole("button", { name: "确认发送" })));
     expect(mocks.api.ask).toHaveBeenCalledWith("a", "合成测试问题", {}, "", expect.any(String), true);
-    expect(screen.queryByRole("button", { name: "停止" })).not.toBeInTheDocument();
-    await act(async () => finish({ answer: "合成回答", sources: [] }));
-    expect(screen.getByText("合成回答")).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "停止" }));
+    const requestId = mocks.api.ask.mock.calls[0][4];
+    expect(mocks.api.cancelAi).toHaveBeenCalledWith(requestId);
+    await act(async () => stop(new Error("已停止生成")));
+    expect(screen.getByRole("button", { name: "提问" })).toBeEnabled();
   });
 
   it("streams the answer and lists cited sources", async () => {
