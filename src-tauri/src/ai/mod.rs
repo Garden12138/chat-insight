@@ -13,6 +13,7 @@ pub mod indexer;
 pub mod retrieval;
 pub mod settings;
 pub mod store;
+pub mod xcli;
 
 use client::OpenAiCompatClient;
 use serde::Serialize;
