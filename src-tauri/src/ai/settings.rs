@@ -10,6 +10,7 @@ pub const DEFAULT_BASE_URL: &str = "http://127.0.0.1:11434/v1";
 pub const BAILIAN_BASE_URL: &str = "https://dashscope.aliyuncs.com/compatible-mode/v1";
 pub const BAILIAN_CHAT_MODEL: &str = "qwen-plus";
 pub const BAILIAN_EMBED_MODEL: &str = "text-embedding-v3";
+const LEGACY_IDENTITY_FILE: &str = "xcli-embedding-identity.json";
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -181,7 +182,7 @@ impl SettingsStore {
             settings.chat_model = normalize_xcli_agent(&settings.chat_model).into();
             settings.vector_provider = None;
             // Leave the migration pending on disk if the legacy identity could not be removed.
-            if remove_file_if_present(self.dir.join("xcli-embedding-identity.json")).is_ok() {
+            if remove_file_if_present(self.dir.join(LEGACY_IDENTITY_FILE)).is_ok() {
                 if let Ok(bytes) = serde_json::to_vec_pretty(&settings) {
                     let _ = write_private_file(&path, &bytes);
                 }
@@ -198,20 +199,17 @@ impl SettingsStore {
         read_key(self.vector_key_path())
     }
 
-    pub fn embedding_identity(&self) -> Option<super::gateway::EmbeddingIdentity> {
-        fs::read(self.dir.join("xcli-embedding-identity.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-    }
-
-    pub fn accept_embedding_identity(
-        &self,
-        identity: &super::gateway::EmbeddingIdentity,
-    ) -> AppResult<()> {
-        write_private_file(
-            &self.dir.join("xcli-embedding-identity.json"),
-            &serde_json::to_vec(identity)?,
-        )
+    pub(super) fn load_for_client(&self) -> (AiSettings, Option<String>) {
+        let _guard = self
+            .settings_lock
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let settings = self.load_and_migrate();
+        let key = match settings.provider {
+            AiProvider::Xcli => self.vector_api_key(),
+            _ => self.api_key(),
+        };
+        (settings, key)
     }
 
     pub fn view(&self) -> AiSettingsView {
@@ -390,14 +388,14 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
-    fn migrates_saved_gateway_settings_and_removes_embedding_identity() {
+    fn migrates_saved_xcli_settings_and_removes_legacy_identity() {
         let temporary = tempdir().unwrap();
         let store = SettingsStore::new(temporary.path().join("ai"));
-        let identity_path = store.dir.join("xcli-embedding-identity.json");
+        let identity_path = store.dir.join(LEGACY_IDENTITY_FILE);
         fs::create_dir(&store.dir).unwrap();
         fs::write(
             store.settings_path(),
-            br#"{"provider":"xcli","baseUrl":"http://127.0.0.1:18741/v1","chatModel":"xcli/text-default","vectorProvider":"bailian"}"#,
+            br#"{"provider":"xcli","baseUrl":"http://127.0.0.1:8080/v1","chatModel":"xcli/text-default","vectorProvider":"bailian"}"#,
         )
         .unwrap();
         fs::write(&identity_path, b"synthetic identity").unwrap();

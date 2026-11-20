@@ -780,6 +780,38 @@ mod tests {
         assert!(prompt.contains("问题：我们什么时候去日本？"));
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn xcli_without_vectors_answers_from_keywords_and_keeps_sources() {
+        use super::super::client::AiClient;
+        use super::super::xcli::{tests::make_fake_xcli, XcliClient, NO_VECTORS};
+
+        let db = seeded_db(&["合成测试消息：火星基地演练"]);
+        let dir = tempdir().unwrap();
+        let executable = make_fake_xcli(dir.path(), "ok");
+        let client = AiClient::Xcli(XcliClient::with_fake_executable(executable, "auto"));
+        assert_eq!(client.embed_model(), NO_VECTORS);
+        assert_eq!(
+            db.ai_index_counts("account", None, client.embed_model())
+                .unwrap()
+                .indexed_chunks,
+            0
+        );
+        let result = ask(
+            &db,
+            &client,
+            &NullSink,
+            "account",
+            "火星基地",
+            Some("alice"),
+            &DateRange::default(),
+            "2026-10-09",
+        )
+        .unwrap();
+        assert_eq!(result.answer, "合成摘要");
+        assert!(result.sources[0].text.contains("火星基地"));
+    }
+
     #[test]
     fn says_so_when_nothing_matches() {
         let db = seeded_db(&["周末一起去公园拍照"]);

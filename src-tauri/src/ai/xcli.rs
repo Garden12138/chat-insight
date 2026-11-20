@@ -1,3 +1,6 @@
+#[cfg(target_os = "macos")]
+mod isolation;
+
 use super::client::{cancelled, ChatMessage, LlmClient, OpenAiCompatClient};
 use crate::error::{AppError, AppResult};
 use serde::Deserialize;
@@ -121,21 +124,57 @@ pub struct XcliAgentStatus {
     pub available: bool,
 }
 
+enum XcliInvocation {
+    #[cfg(all(test, unix))]
+    Fake(PathBuf),
+    #[cfg(target_os = "macos")]
+    Isolated(isolation::IsolatedXcli),
+}
+
+impl XcliInvocation {
+    fn command(&self) -> Command {
+        match *self {
+            #[cfg(all(test, unix))]
+            Self::Fake(ref executable) => {
+                let mut command = Command::new(executable);
+                command
+                    .env_remove("FAKE_XCLI_MODE")
+                    .env_remove("FAKE_XCLI_STDIN")
+                    .env_remove("FAKE_XCLI_CANCEL");
+                command
+            }
+            #[cfg(target_os = "macos")]
+            Self::Isolated(ref isolation) => isolation.command(),
+        }
+    }
+}
+
+fn missing_xcli(executable: &Path) -> AppError {
+    AppError::Ai(format!(
+        "未找到 xcli（{}），请从 https://github.com/Garden12138/xcli/releases 安装，或在 AI 设置中填写 xcli 的绝对路径",
+        executable.display()
+    ))
+}
+
 pub struct XcliClient {
-    executable: PathBuf,
+    executable: AppResult<PathBuf>,
     agent: &'static str,
     pub(super) vectors: Option<OpenAiCompatClient>,
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     fake_executable: bool,
 }
 
 impl XcliClient {
-    pub fn new(executable: PathBuf, agent: &str, vectors: Option<OpenAiCompatClient>) -> Self {
+    pub fn new(
+        executable: AppResult<PathBuf>,
+        agent: &str,
+        vectors: Option<OpenAiCompatClient>,
+    ) -> Self {
         Self {
             executable,
             agent: normalize_xcli_agent(agent),
             vectors,
-            #[cfg(test)]
+            #[cfg(all(test, unix))]
             fake_executable: false,
         }
     }
@@ -144,41 +183,53 @@ impl XcliClient {
     pub(crate) fn with_fake_executable(executable: PathBuf, agent: &str) -> Self {
         Self {
             fake_executable: true,
-            ..Self::new(executable, agent, None)
+            ..Self::new(Ok(executable), agent, None)
         }
     }
 
-    fn command(&self) -> AppResult<Command> {
+    fn executable(&self) -> AppResult<&Path> {
+        self.executable
+            .as_deref()
+            .map_err(|error| AppError::Validation(error.to_string()))
+    }
+
+    fn invocation(&self) -> AppResult<XcliInvocation> {
         if cfg!(windows) {
             return Err(AppError::Ai("xcli 暂不支持 Windows".into()));
         }
-        #[cfg(test)]
+        let executable = self.executable()?;
+        #[cfg(all(test, unix))]
         if self.fake_executable {
-            let mut command = Command::new(&self.executable);
-            command
-                .env_remove("FAKE_XCLI_MODE")
-                .env_remove("FAKE_XCLI_STDIN")
-                .env_remove("FAKE_XCLI_CANCEL");
-            return Ok(command);
+            return Ok(XcliInvocation::Fake(executable.to_path_buf()));
         }
-        Err(AppError::Ai("当前环境尚未启用 xcli 的读取隔离".into()))
+        #[cfg(target_os = "macos")]
+        {
+            isolation::IsolatedXcli::prepare(executable, self.agent).map(XcliInvocation::Isolated)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = executable;
+            Err(AppError::Ai("当前平台尚未启用 xcli 的读取隔离".into()))
+        }
     }
 
     fn spawn(&self, command: &mut Command) -> AppResult<Child> {
+        let executable = self.executable()?;
         command.spawn().map_err(|error| {
-            let executable = self.executable.display();
             if error.kind() == io::ErrorKind::NotFound {
-                AppError::Ai(format!(
-                    "未找到 xcli（{executable}），请从 https://github.com/Garden12138/xcli/releases 安装，或在 AI 设置中填写 xcli 的绝对路径"
-                ))
+                missing_xcli(executable)
             } else {
-                AppError::Ai(format!("无法启动 xcli（{executable}）：{error}"))
+                AppError::Ai(format!(
+                    "无法启动 xcli（{}）：{error}",
+                    executable.display()
+                ))
             }
         })
     }
 
     pub fn agents(&self) -> AppResult<Vec<XcliAgentStatus>> {
-        let mut command = self.command()?;
+        let invocation = self.invocation()?;
+        let mut command = invocation.command();
         let mut child = self.spawn(
             command
                 .args(["agents", "--json"])
@@ -208,20 +259,19 @@ impl XcliClient {
             .map_err(|_| AppError::Ai("xcli 返回的 CLI 状态格式无效".into()))
     }
 
-    fn cancel_task(&self, child: &mut Child, task: &str) {
+    fn cancel_task(invocation: &XcliInvocation, child: &mut Child, task: &str) {
         let deadline = Instant::now() + SHUTDOWN_TIMEOUT;
         if !task.is_empty() {
-            if let Ok(mut command) = self.command() {
-                if let Ok(mut cancel) = command
-                    .args(["cancel", task])
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                {
-                    if !matches!(wait_for_exit(&mut cancel, deadline), Ok(Some(_))) {
-                        force_exit(&mut cancel);
-                    }
+            let mut command = invocation.command();
+            if let Ok(mut cancel) = command
+                .args(["cancel", task])
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()
+            {
+                if !matches!(wait_for_exit(&mut cancel, deadline), Ok(Some(_))) {
+                    force_exit(&mut cancel);
                 }
             }
         }
@@ -237,7 +287,8 @@ impl LlmClient for XcliClient {
         messages: &[ChatMessage],
         on_delta: &mut dyn FnMut(&str) -> bool,
     ) -> AppResult<String> {
-        let mut command = self.command()?;
+        let invocation = self.invocation()?;
+        let mut command = invocation.command();
         let request = serde_json::to_vec(&build_xcli_request(messages, self.agent))?;
         let mut child = self.spawn(
             command
@@ -263,7 +314,7 @@ impl LlmClient for XcliClient {
                 task = event["task"].as_str().unwrap_or_default().to_owned();
             }
             if !on_delta("") {
-                self.cancel_task(&mut child, &task);
+                Self::cancel_task(&invocation, &mut child, &task);
                 return Err(cancelled());
             }
             if kind == "task.finished" {
@@ -272,7 +323,7 @@ impl LlmClient for XcliClient {
             }
         }
         let Some(status) = wait_for_exit(&mut child, Instant::now() + SHUTDOWN_TIMEOUT)? else {
-            self.cancel_task(&mut child, &task);
+            Self::cancel_task(&invocation, &mut child, &task);
             return Err(AppError::Ai("xcli 在结果流结束后未退出".into()));
         };
         match result {
@@ -520,7 +571,7 @@ esac
     #[test]
     fn refuses_to_send_chat_when_the_launcher_has_no_read_isolation() {
         let dir = tempdir().unwrap();
-        let client = XcliClient::new(make_fake_xcli(dir.path(), "ok"), "auto", None);
+        let client = XcliClient::new(Ok(make_fake_xcli(dir.path(), "ok")), "cursor", None);
         let error = client
             .chat(&[ChatMessage::user("合成问题")], &mut |_| true)
             .unwrap_err();

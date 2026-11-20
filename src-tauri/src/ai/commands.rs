@@ -4,7 +4,7 @@ use super::decisions;
 use super::events::{self, EventReviewEstimate, EventReviewResult};
 use super::features::{self, AskResult, ReportResult, SummaryResult, TopicsResult};
 use super::indexer::{self, IndexOutcome, IndexProgress};
-use super::settings::{AiSettingsInput, AiSettingsView};
+use super::settings::{AiProvider, AiSettings, AiSettingsInput, AiSettingsView, AiTarget};
 use super::store::{CacheKey, ContentEstimate, IndexCounts};
 use super::{AiState, Sink};
 use crate::error::{AppError, AppResult};
@@ -98,22 +98,12 @@ pub fn ai_save_settings(
     ai.settings.save(input).map_err(public_error)
 }
 
-/// Read-only routing metadata for the consent UI; never sends chat text or invokes a model.
-#[tauri::command]
-pub async fn ai_xcli_privacy(
-    ai: State<'_, AiState>,
-) -> Result<Option<super::client::GatewayPrivacy>, String> {
-    let (_, client) = ai.client();
-    blocking(move || client.gateway_privacy()).await
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AiTestResult {
     pub models: Vec<String>,
     pub chat_model_found: bool,
     pub embedding_dimension: usize,
-    pub gateway: Option<super::client::GatewayPrivacy>,
 }
 
 fn model_listed(models: &[String], wanted: &str) -> bool {
@@ -127,24 +117,31 @@ fn model_listed(models: &[String], wanted: &str) -> bool {
 #[tauri::command]
 pub async fn ai_test_connection(ai: State<'_, AiState>) -> Result<AiTestResult, String> {
     let (settings, client) = ai.client();
-    let client = client.with_cloud_consent(settings.allow_cloud);
-    if settings.provider != super::settings::AiProvider::Xcli
-        && !settings.is_local()
-        && !settings.allow_cloud
-    {
+    if !settings.is_local_target(AiTarget::Vectors) && !settings.allow_cloud {
         return Err(
             "模型服务地址不在本机。如需使用云端服务，请先勾选“允许使用云端模型服务”".into(),
         );
     }
     blocking(move || {
-        let gateway = client.gateway_privacy()?;
-        let models = client.list_models().unwrap_or_default();
+        let models = if settings.provider == AiProvider::Xcli {
+            client.list_models()?
+        } else {
+            client.list_models().unwrap_or_default()
+        };
+        let chat_model_found = if settings.provider == AiProvider::Xcli {
+            if settings.chat_model == "auto" {
+                !models.is_empty()
+            } else {
+                model_listed(&models, &settings.chat_model)
+            }
+        } else {
+            models.is_empty() || model_listed(&models, &settings.chat_model)
+        };
         let embedding_dimension = client.test_embedding_dimension()?;
         Ok(AiTestResult {
-            chat_model_found: models.is_empty() || model_listed(&models, &settings.chat_model),
+            chat_model_found,
             embedding_dimension,
             models,
-            gateway,
         })
     })
     .await
@@ -187,23 +184,20 @@ pub async fn ai_build_index(
     rebuild: bool,
     cloud_consent: bool,
 ) -> Result<IndexOutcome, String> {
-    let (settings, mut client) = ai.client_with_consent(cloud_consent);
+    let (settings, client) = ai.client();
     settings
-        .ensure_allowed(true, cloud_consent)
+        .ensure_allowed_for(AiTarget::Vectors, true, cloud_consent)
         .map_err(public_error)?;
     let lock = TaskLock::index(&ai.index_running).map_err(public_error)?;
     ai.index_cancel.store(false, Ordering::SeqCst);
     let cancel = Arc::clone(&ai.index_cancel);
     let database = state.database.clone();
-    let settings_store = ai.settings.clone();
     let emit = move |progress: IndexProgress| {
         let _ = app.emit("ai-index-progress", progress);
     };
     blocking(move || {
         let _lock = lock;
-        if let Some(identity) = client.prepare_index(rebuild)? {
-            settings_store.accept_embedding_identity(&identity)?;
-        }
+        client.prepare_index()?;
         if rebuild {
             database.ai_clear_index(&account_id, client.embed_model())?;
         }
@@ -298,10 +292,8 @@ pub async fn ai_ask(
     request_id: String,
     cloud_consent: bool,
 ) -> Result<AskResult, String> {
-    let (settings, client) = ai.client_with_consent(cloud_consent);
-    settings
-        .ensure_allowed(true, cloud_consent)
-        .map_err(public_error)?;
+    let (settings, client) = ai.client();
+    ensure_ask_allowed(&settings, cloud_consent).map_err(public_error)?;
     let sink = ai.stream(&app, &request_id);
     let database = state.database.clone();
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -345,7 +337,7 @@ pub async fn ai_review_group_events(
     cloud_consent: bool,
 ) -> Result<EventReviewResult, String> {
     let (read_cache, generate) = cache_mode(&mode).map_err(public_error)?;
-    let (settings, client) = ai.client_with_consent(cloud_consent);
+    let (settings, client) = ai.client();
     let scope = events::event_review_scope(chat_id.as_deref());
     let range = crate::models::DateRange {
         from: Some(date.clone()),
@@ -378,7 +370,7 @@ pub async fn ai_review_group_events(
         }
     }
     settings
-        .ensure_allowed(true, cloud_consent)
+        .ensure_allowed_for(AiTarget::Text, true, cloud_consent)
         .map_err(public_error)?;
     let sink = ai.stream(&app, &request_id);
     let database = state.database.clone();
@@ -415,7 +407,7 @@ pub async fn ai_summarize_chat(
     cloud_consent: bool,
 ) -> Result<Option<SummaryResult>, String> {
     let (read_cache, generate) = cache_mode(&mode).map_err(public_error)?;
-    let (settings, client) = ai.client_with_consent(cloud_consent);
+    let (settings, client) = ai.client();
     let key = CacheKey {
         account_id: &account_id,
         kind: "summary",
@@ -443,7 +435,7 @@ pub async fn ai_summarize_chat(
         }
     }
     settings
-        .ensure_allowed(true, cloud_consent)
+        .ensure_allowed_for(AiTarget::Text, true, cloud_consent)
         .map_err(public_error)?;
     let sink = ai.stream(&app, &request_id);
     let database = state.database.clone();
@@ -479,7 +471,7 @@ pub async fn ai_chat_topics(
     cloud_consent: bool,
 ) -> Result<Option<TopicsResult>, String> {
     let (read_cache, generate) = cache_mode(&mode).map_err(public_error)?;
-    let (settings, client) = ai.client_with_consent(cloud_consent);
+    let (settings, client) = ai.client();
     let model = format!("{}|{}", settings.chat_model, client.embed_model());
     let key = CacheKey {
         account_id: &account_id,
@@ -508,8 +500,9 @@ pub async fn ai_chat_topics(
         }
     }
     settings
-        .ensure_allowed(true, cloud_consent)
+        .ensure_allowed_for(AiTarget::Vectors, true, cloud_consent)
         .map_err(public_error)?;
+    client.prepare_index().map_err(public_error)?;
     let lock = TaskLock::index(&ai.index_running).map_err(public_error)?;
     let sink = ai.stream(&app, &request_id);
     let database = state.database.clone();
@@ -577,7 +570,6 @@ pub async fn ai_year_report(
 ) -> Result<Option<ReportResult>, String> {
     let (read_cache, generate) = cache_mode(&mode).map_err(public_error)?;
     let (settings, client) = ai.client();
-    let client = client.with_cloud_consent(settings.allow_cloud);
     let range = DateRange {
         from: Some(format!("{year}-01-01")),
         to: Some(format!("{year}-12-31")),
@@ -609,7 +601,7 @@ pub async fn ai_year_report(
         }
     }
     settings
-        .ensure_allowed(false, false)
+        .ensure_allowed_for(AiTarget::Text, false, false)
         .map_err(public_error)?;
     let sink = ai.stream(&app, &request_id);
     let database = state.database.clone();
@@ -633,10 +625,12 @@ pub async fn ai_year_report(
 #[tauri::command]
 pub async fn ai_commitment_estimate(
     state: State<'_, AppState>,
+    ai: State<'_, AiState>,
     account_id: String,
     range: DateRange,
     chat_id: Option<String>,
 ) -> Result<ScanEstimate, String> {
+    ensure_scanning_supported(&ai.settings.load()).map_err(public_error)?;
     let database = state.database.clone();
     blocking(move || {
         let plans = commitments::plan_scan(&database, &account_id, chat_id.as_deref(), &range)?;
@@ -657,7 +651,8 @@ pub async fn ai_scan_commitments(
     request_id: String,
     cloud_consent: bool,
 ) -> Result<ScanOutcome, String> {
-    let (settings, client) = ai.client_with_consent(cloud_consent);
+    let (settings, client) = ai.client();
+    ensure_scanning_supported(&settings).map_err(public_error)?;
     settings
         .ensure_allowed(true, cloud_consent)
         .map_err(public_error)?;
@@ -683,10 +678,12 @@ pub async fn ai_scan_commitments(
 #[tauri::command]
 pub async fn ai_decision_estimate(
     state: State<'_, AppState>,
+    ai: State<'_, AiState>,
     account_id: String,
     chat_id: String,
     range: DateRange,
 ) -> Result<ScanEstimate, String> {
+    ensure_scanning_supported(&ai.settings.load()).map_err(public_error)?;
     let database = state.database.clone();
     blocking(move || {
         let plans = decisions::plan_scan(&database, &account_id, &chat_id, &range)?;
@@ -707,7 +704,8 @@ pub async fn ai_scan_decisions(
     request_id: String,
     cloud_consent: bool,
 ) -> Result<ScanOutcome, String> {
-    let (settings, client) = ai.client_with_consent(cloud_consent);
+    let (settings, client) = ai.client();
+    ensure_scanning_supported(&settings).map_err(public_error)?;
     settings
         .ensure_allowed(true, cloud_consent)
         .map_err(public_error)?;
@@ -730,9 +728,46 @@ pub async fn ai_scan_decisions(
     .await
 }
 
+fn ensure_ask_allowed(settings: &AiSettings, cloud_consent: bool) -> AppResult<()> {
+    settings.ensure_allowed_for(AiTarget::Vectors, true, cloud_consent)?;
+    settings.ensure_allowed_for(AiTarget::Text, true, cloud_consent)
+}
+
+fn ensure_scanning_supported(settings: &AiSettings) -> AppResult<()> {
+    if settings.provider == AiProvider::Xcli {
+        return Err(AppError::Ai(
+            "xcli 每次调用都要启动 CLI，不适合批量扫描。请切换到本机模型或阿里云百炼后再扫描。"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn xcli_blocks_batch_scans_and_allows_local_vector_indexing() {
+        let settings = AiSettings {
+            provider: AiProvider::Xcli,
+            enabled: true,
+            allow_cloud: true,
+            vector_provider: Some(AiProvider::OpenaiCompatible),
+            ..AiSettings::default()
+        };
+        let error = ensure_scanning_supported(&settings).unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "xcli 每次调用都要启动 CLI，不适合批量扫描。请切换到本机模型或阿里云百炼后再扫描。"
+        );
+        assert!(settings
+            .ensure_allowed_for(AiTarget::Vectors, true, false)
+            .is_ok());
+        assert!(ensure_ask_allowed(&settings, false).is_err());
+        assert!(ensure_ask_allowed(&settings, true).is_ok());
+        assert!(ensure_scanning_supported(&AiSettings::default()).is_ok());
+    }
 
     #[test]
     fn matches_ollama_latest_tags() {

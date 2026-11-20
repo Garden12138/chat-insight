@@ -346,7 +346,6 @@ pub fn run() {
             ai::commands::ai_get_settings,
             ai::commands::ai_save_settings,
             ai::commands::ai_test_connection,
-            ai::commands::ai_xcli_privacy,
             ai::commands::ai_index_status,
             ai::commands::ai_build_index,
             ai::commands::ai_cancel_index,
