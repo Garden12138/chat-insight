@@ -10,6 +10,7 @@ use uuid::Uuid;
 
 const SANDBOX_EXEC: &str = "/usr/bin/sandbox-exec";
 const SYSTEM_PATH: &str = "/usr/bin:/bin";
+const SYSTEM_CA_BUNDLE: &str = "/private/etc/ssl/cert.pem";
 const PROFILE: &str = r#"
 (version 1)
 (deny default)
@@ -28,24 +29,86 @@ const PROFILE: &str = r#"
     (literal (param "AUTH_LOCK"))
     (regex (string-append "^" (regex-quote (param "AUTH_DIR")) "/[.]auth-[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]$")))
 (allow file-read* file-write-data (literal "/dev/null") (literal "/dev/zero"))
-(allow file-read-data (literal "/dev/urandom") (literal "/dev/random"))
+(allow file-read-data
+    (literal "/dev/urandom") (literal "/dev/random")
+    (literal "/private/etc/ssl/cert.pem") (literal "/private/etc/ssl/openssl.cnf"))
 (allow file-read-metadata file-test-existence)
 (allow sysctl-read)
+(allow ipc-posix-shm-read* (ipc-posix-name-prefix "apple.cfprefs."))
 (allow process-info* signal (target same-sandbox))
+(allow user-preference-read (preference-domain "com.openai.codex"))
+(allow managed-preference-read (preference-domain "com.openai.codex"))
 (allow mach-lookup
+    (global-name "com.apple.cfprefsd.agent")
+    (global-name "com.apple.cfprefsd.daemon")
     (global-name "com.apple.mDNSResponder")
+    (global-name "com.apple.dnssd.service")
     (global-name "com.apple.SystemConfiguration.configd")
     (global-name "com.apple.trustd.agent")
     (global-name "com.apple.trustd"))
-(allow network-outbound (remote tcp "*:443"))
-(deny network-outbound (remote ip "localhost:*"))
+(allow network-outbound
+    (literal "/private/var/run/mDNSResponder")
+    (require-all (remote tcp "*:443") (require-not (remote ip "localhost:*"))))
+(unless (equal? (param "PROXY_ENDPOINT") "")
+    (allow network-outbound (remote tcp (param "PROXY_ENDPOINT"))))
 "#;
+
+struct LocalProxy {
+    host: &'static str,
+    port: u16,
+}
+
+impl LocalProxy {
+    fn parse(value: &str) -> Option<Self> {
+        let authority = value.trim().strip_prefix("http://")?.trim_end_matches('/');
+        let (host, port) = authority.rsplit_once(':')?;
+        Self::new(host, port.parse().ok()?)
+    }
+
+    fn new(host: &str, port: u16) -> Option<Self> {
+        let host = match host {
+            "localhost" | "127.0.0.1" => "127.0.0.1",
+            "::1" | "[::1]" => "[::1]",
+            _ => return None,
+        };
+        (port != 0).then_some(Self { host, port })
+    }
+
+    fn detected() -> Option<Self> {
+        ["HTTPS_PROXY", "https_proxy"]
+            .into_iter()
+            .find_map(|name| env::var(name).ok().and_then(|value| Self::parse(&value)))
+            .or_else(Self::system)
+    }
+
+    fn system() -> Option<Self> {
+        let output = Command::new("/usr/sbin/scutil")
+            .arg("--proxy")
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let output = String::from_utf8(output.stdout).ok()?;
+        let setting = |wanted| {
+            output.lines().find_map(|line| {
+                let (name, value) = line.trim().split_once(" : ")?;
+                (name == wanted).then_some(value)
+            })
+        };
+        if setting("HTTPSEnable") != Some("1") {
+            return None;
+        }
+        Self::new(setting("HTTPSProxy")?, setting("HTTPSPort")?.parse().ok()?)
+    }
+}
 
 pub(super) struct IsolatedXcli {
     root: PathBuf,
     xcli: PathBuf,
     codex: PathBuf,
     auth: PathBuf,
+    proxy: Option<LocalProxy>,
 }
 
 impl IsolatedXcli {
@@ -69,10 +132,22 @@ impl IsolatedXcli {
         let xcli_home = env::var_os("XCLI_HOME")
             .map(PathBuf::from)
             .unwrap_or_else(|| home.join(".xcli"));
-        Self::prepare_in(executable, &codex, &auth, &xcli_home.join("chat-insight"))
+        Self::prepare_in(
+            executable,
+            &codex,
+            &auth,
+            &xcli_home.join("chat-insight"),
+            LocalProxy::detected(),
+        )
     }
 
-    fn prepare_in(executable: &Path, codex: &Path, auth: &Path, runs: &Path) -> AppResult<Self> {
+    fn prepare_in(
+        executable: &Path,
+        codex: &Path,
+        auth: &Path,
+        runs: &Path,
+        proxy: Option<LocalProxy>,
+    ) -> AppResult<Self> {
         let xcli = executable
             .canonicalize()
             .map_err(|_| super::missing_xcli(executable))?;
@@ -101,6 +176,7 @@ impl IsolatedXcli {
             xcli,
             codex,
             auth,
+            proxy,
         };
         for directory in ["xcli", "codex", "home", "tmp"] {
             DirBuilder::new()
@@ -121,6 +197,8 @@ impl IsolatedXcli {
                         "--ignore-rules",
                         "--disable",
                         "shell_tool",
+                        "-c",
+                        "features.apps=false",
                         "-c",
                         "cli_auth_credentials_store=\"file\""
                     ],
@@ -148,6 +226,19 @@ impl IsolatedXcli {
             .env("CODEX_HOME", self.root.join("codex"))
             .env("XCLI_HOME", self.root.join("xcli"))
             .current_dir(&self.root);
+        if Path::new(SYSTEM_CA_BUNDLE).is_file() {
+            command.env("CODEX_CA_CERTIFICATE", SYSTEM_CA_BUNDLE);
+        }
+        let proxy_endpoint = self.proxy.as_ref().map_or_else(String::new, |proxy| {
+            command.env(
+                "HTTPS_PROXY",
+                format!("http://{}:{}", proxy.host, proxy.port),
+            );
+            format!("localhost:{}", proxy.port)
+        });
+        command
+            .arg("-D")
+            .arg(format!("PROXY_ENDPOINT={proxy_endpoint}"));
         for (key, value) in [
             ("RUN", self.root.as_path()),
             ("XCLI", self.xcli.as_path()),
@@ -190,6 +281,50 @@ mod tests {
     use tempfile::tempdir;
 
     #[test]
+    fn allows_only_the_configured_proxy_to_receive_loopback_connections() {
+        use std::net::TcpListener;
+
+        let fixture = tempdir().unwrap();
+        let auth = fixture.path().join("auth.json");
+        fs::write(&auth, "synthetic login").unwrap();
+        let allowed = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let blocked = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let authorized = allowed.local_addr().unwrap().port();
+        let unauthorized = blocked.local_addr().unwrap().port();
+        let proxy = LocalProxy::parse(&format!("http://127.0.0.1:{authorized}")).unwrap();
+        assert!(LocalProxy::parse("http://example.com:6738").is_none());
+        assert!(LocalProxy::parse("http://127.0.0.1:6738/path").is_none());
+
+        let xcli = fixture.path().join("xcli");
+        fs::write(
+            &xcli,
+            r#"#!/bin/bash
+set -eu
+test "$HTTPS_PROXY" = "http://127.0.0.1:$1"
+( : >/dev/tcp/127.0.0.1/"$1" ) || exit 11
+if ( : >/dev/tcp/127.0.0.1/"$2" ) 2>/dev/null; then exit 12; fi
+"#,
+        )
+        .unwrap();
+        fs::set_permissions(&xcli, fs::Permissions::from_mode(0o700)).unwrap();
+        let sandbox = IsolatedXcli::prepare_in(
+            &xcli,
+            &xcli,
+            &auth,
+            &fixture.path().join("runs"),
+            Some(proxy),
+        )
+        .unwrap();
+        let status = sandbox
+            .command()
+            .arg(authorized.to_string())
+            .arg(unauthorized.to_string())
+            .status()
+            .unwrap();
+        assert!(status.success(), "{status}");
+    }
+
+    #[test]
     fn subprocess_can_reuse_existing_login_but_cannot_read_previous_chats() {
         let fixture = tempdir().unwrap();
         let existing = fixture.path().join("existing");
@@ -222,7 +357,7 @@ printf '%s\n' 'synthetic renewed login' > "${3%/*}/.auth-check1"
         .unwrap();
         fs::set_permissions(&xcli, fs::Permissions::from_mode(0o700)).unwrap();
 
-        let sandbox = IsolatedXcli::prepare_in(&xcli, &xcli, &auth, &runs).unwrap();
+        let sandbox = IsolatedXcli::prepare_in(&xcli, &xcli, &auth, &runs, None).unwrap();
         let run = sandbox.root.clone();
         let status = sandbox
             .command()

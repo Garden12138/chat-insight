@@ -1,3 +1,5 @@
+#[cfg(all(test, target_os = "macos"))]
+mod acceptance;
 #[cfg(target_os = "macos")]
 mod isolation;
 
